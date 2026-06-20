@@ -19,7 +19,7 @@ Docs: https://docs.openclaw.ai
 - Plugins and installs: externalized official providers publish as independent npm packages, Gateway discovers installed channel plugins at startup, and StepFun installs exclusively from npm. (#93470) Thanks @sunlit-deng, @cxdnicole, and @vincentkoc.
 - Dashboard and mobile: add a session workspace rail, plugin health in status, compact cron lists, and iOS Watch controls. (#92856, #91952, #93395, #93387) Thanks @Solvely-Colin, @jalehman, @yu-xin-c, @centralpc, @joshavant, and @vincentkoc.
 - Codex, observability, and skills: add automatic plugin approvals and SecretRefs, preserve ClawHub skill provenance, add OpenTelemetry log export, and expose remote-node execution to Codex when a node is connected. (#92625, #94324, #93283, #94561, #93654) Thanks @kevinslin, @kevinlin-openai, @momothemage, @nmccready-tars, @jesse-merhi, @vincentkoc, and @JPKay-AI.
-- QA and release engineering: QA scenarios now use YAML, with broader profile evidence and release coverage for the plugin and channel matrix.
+- QA and release engineering: QA scenarios now use YAML, with broader profile evidence and release coverage for the plugin and channel matrix. Thanks @vincentkoc.
 
 ### Fixes
 
@@ -33,7 +33,7 @@ Docs: https://docs.openclaw.ai
 
 ### Complete contribution record
 
-This audited record covers the complete v2026.6.8..origin/main history: 422 merged PRs. The generation manifest also supplies direct commits as editorial input; the grouped notes above prioritize user impact.
+This audited record covers the complete v2026.6.8..HEAD history: 422 merged PRs. The generation manifest also supplies direct commits as editorial input; the grouped notes above prioritize user impact.
 
 #### Pull requests
 
@@ -175,7 +175,7 @@ This audited record covers the complete v2026.6.8..origin/main history: 422 merg
 - **PR #90003** feat(policy): cover exec approvals artifact. Thanks @giodl73-repo.
 - **PR #93448** fix(guards): allow auth profile sqlite reader. Thanks @amknight.
 - **PR #93424** fix(mattermost): keep message tool replies in threads. Thanks @amknight and @vincentkoc.
-- **PR #93418** fix(telegram): forward Bot API 10.1 rich_message content to agent. Related #93410. Thanks @xzh-xydt and @vincentkoc and @0pen7ech.
+- **PR #93418** fix(telegram): forward Bot API 10.1 rich_message content to agent. Related #93410. Thanks @xzh-icenter and @vincentkoc and @0pen7ech.
 - **PR #93175** test(qa): taxonomy profiles: includeAllCategories for release profile, update some coverage. Thanks @RomneyDa.
 - **PR #93456** fix(agents): handle string assistant message content. Thanks @vincentkoc.
 - **PR #93441** fix(outbound): ignore schema-padded poll metadata on send. Related #43015. Thanks @weichengdeng and @charzhou.
@@ -428,7 +428,7 @@ This audited record covers the complete v2026.6.8..origin/main history: 422 merg
 - **PR #93823** fix(whatsapp): keep opening text chunk when first media fails on multi-chunk reply. Thanks @yetval.
 - **PR #89203** refactor: route SDK session compatibility through seam. Thanks @jalehman.
 - **PR #94453** fix: default cron runMode to "due" instead of "force" (#94270). Thanks @jincheng-xydt and @sallyom and @davectr.
-- **PR #94746** fix(note): prevent clack from re-breaking copy-sensitive tokens. Related #94730. Thanks @xzh-xydt and @berkgungor.
+- **PR #94746** fix(note): prevent clack from re-breaking copy-sensitive tokens. Related #94730. Thanks @xzh-icenter and @berkgungor.
 - **PR #89904** refactor: route sdk session compatibility through accessor. Thanks @jalehman.
 - **PR #86719** fix(skills): retarget stale plugin skill symlinks. Related #85925. Thanks @stevenepalmer and @shakkernerd.
 - **PR #94337** fix(tui): show 0 not ? for fresh-session context tokens in footer. Thanks @mushuiyu886.
