@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   ARTIFACT_TARBALL_SCAN_MAX_ENTRIES,
   cleanupPackageSourceWorktreeForTest,
+  cleanPackedOpenClawTarballsForTest,
   downloadUrl,
   findSingleTarballForTest,
   loadTrustedPackageSource,
@@ -263,6 +264,23 @@ describe("resolve-openclaw-package-candidate", () => {
     }
   });
 
+  it("cleans stale package tarballs before npm fallback scanning", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-npm-pack-stale-"));
+    tempDirs.push(dir);
+    await writeFile(path.join(dir, "openclaw-9999.1.1.tgz"), "stale");
+    await writeFile(path.join(dir, "openclaw-C:evil.tgz"), "unsafe");
+
+    await cleanPackedOpenClawTarballsForTest(dir);
+    await writeFile(path.join(dir, "openclaw-2026.6.17.tgz"), "current");
+
+    await expect(
+      moveNewestPackedTarballForTest(dir, "npm notice\n", "openclaw-current.tgz"),
+    ).resolves.toBe(path.join(dir, "openclaw-current.tgz"));
+    await expect(missing(path.join(dir, "openclaw-9999.1.1.tgz"))).resolves.toBe(true);
+    await expect(readFile(path.join(dir, "openclaw-C:evil.tgz"), "utf8")).resolves.toBe("unsafe");
+    await expect(readFile(path.join(dir, "openclaw-current.tgz"), "utf8")).resolves.toBe("current");
+  });
+
   it("bounds captured command stderr tails on failures", async () => {
     await expect(
       runCommandForTest(
@@ -330,6 +348,63 @@ describe("resolve-openclaw-package-candidate", () => {
         process.kill(childPid, "SIGKILL");
       }
     }
+  });
+
+  it("rejects timed-out package runner commands when descendants exit cleanly", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-runner-timeout-clean-"));
+    tempDirs.push(dir);
+    const childPidPath = path.join(dir, "child.pid");
+    const readyPath = path.join(dir, "child.ready");
+    const cleanupPath = path.join(dir, "child.cleanup");
+
+    const childScript = [
+      "const fs = require('node:fs');",
+      "process.on('SIGTERM', () => {",
+      "  fs.writeFileSync(process.env.OPENCLAW_TEST_CHILD_CLEANUP, 'clean');",
+      "  setTimeout(() => process.exit(0), 75);",
+      "});",
+      "fs.writeFileSync(process.env.OPENCLAW_TEST_CHILD_READY, 'ready');",
+      "setInterval(() => {}, 1000);",
+    ].join("");
+    const parentScript = [
+      "const { spawn } = require('node:child_process');",
+      "const fs = require('node:fs');",
+      `const child = spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], {`,
+      "  stdio: 'ignore',",
+      "  env: {",
+      "    ...process.env,",
+      "    OPENCLAW_TEST_CHILD_CLEANUP: process.env.OPENCLAW_TEST_CHILD_CLEANUP,",
+      "    OPENCLAW_TEST_CHILD_READY: process.env.OPENCLAW_TEST_CHILD_READY,",
+      "  },",
+      "});",
+      "fs.writeFileSync(process.env.OPENCLAW_TEST_CHILD_PID, String(child.pid));",
+      "process.on('SIGTERM', () => process.exit(0));",
+      "setInterval(() => {}, 1000);",
+    ].join("");
+
+    const startedAt = Date.now();
+    const timeoutAssertion = expect(
+      runCommandForTest(process.execPath, ["-e", parentScript], {
+        env: {
+          ...process.env,
+          OPENCLAW_TEST_CHILD_CLEANUP: cleanupPath,
+          OPENCLAW_TEST_CHILD_PID: childPidPath,
+          OPENCLAW_TEST_CHILD_READY: readyPath,
+        },
+        killAfterMs: 1000,
+        timeoutMs: 1000,
+      }),
+    ).rejects.toThrow(/timed out after 1000ms/u);
+
+    await waitForFile(readyPath, 2_000);
+    await timeoutAssertion;
+
+    expect(readFileSync(cleanupPath, "utf8")).toBe("clean");
+    expect(Date.now() - startedAt).toBeLessThan(1_700);
   });
 
   it("forwards external termination to package runner process groups", async () => {
@@ -724,6 +799,50 @@ describe("resolve-openclaw-package-candidate", () => {
       }),
     ).rejects.toThrow(/exceeds maximum download size/u);
     expect(bodyCancelled).toBe(true);
+  });
+
+  it("rejects unsafe decimal package_url content-length values before reading", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-download-"));
+    tempDirs.push(dir);
+    const target = path.join(dir, "openclaw.tgz");
+    let readStarted = false;
+    let bodyCancelled = false;
+
+    await expect(
+      downloadUrl("https://packages.example/openclaw.tgz", target, {
+        fetchImpl: async () =>
+          ({
+            body: {
+              cancel() {
+                bodyCancelled = true;
+                return Promise.resolve();
+              },
+              getReader() {
+                return {
+                  cancel() {
+                    bodyCancelled = true;
+                    return Promise.resolve();
+                  },
+                  read() {
+                    readStarted = true;
+                    return new Promise(() => {});
+                  },
+                  releaseLock() {},
+                };
+              },
+            },
+            headers: new Headers({ "content-length": "9007199254740993" }),
+            status: 200,
+          }) as Response,
+        lookupHost: lookupAddresses([{ address: "93.184.216.34", family: 4 }]),
+        maxBytes: 1024,
+        timeoutMs: 25,
+      }),
+    ).rejects.toThrow(/exceeds maximum download size/u);
+    expect(readStarted).toBe(false);
+    expect(bodyCancelled).toBe(true);
+    await expect(missing(target)).resolves.toBe(true);
+    await expect(missing(`${target}.tmp`)).resolves.toBe(true);
   });
 
   it("bounds package_url downloads and writes completed files atomically", async () => {

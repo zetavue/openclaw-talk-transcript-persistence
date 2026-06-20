@@ -31,6 +31,7 @@ function usage() {
     "  [--repo-root <openclaw-repo>]",
     "  [--iterations <count>]",
     "  [--methods <comma-separated-methods>]",
+    "  [--help, -h]",
   ].join("\n");
 }
 
@@ -56,11 +57,16 @@ function parsePositiveInt(value, flag) {
 
 export function parseArgs(argv) {
   const args = {
+    help: false,
     iterations: DEFAULT_ITERATIONS,
     methods: DEFAULT_METHODS,
   };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
+    if (arg === "--help" || arg === "-h") {
+      args.help = true;
+      continue;
+    }
     if (arg === "--output-dir") {
       args.outputDir = readFlagValue(argv, index, arg);
       index += 1;
@@ -85,6 +91,9 @@ export function parseArgs(argv) {
       continue;
     }
     throw new Error(`Unknown argument: ${arg}\n${usage()}`);
+  }
+  if (args.help) {
+    return args;
   }
   if (!args.outputDir) {
     throw new Error(usage());
@@ -711,18 +720,19 @@ export function createGatewayClient({ WebSocket, openTimeoutMs = 8_000, url }) {
         reject(new Error(`timeout waiting for ${method}`));
       }, timeoutMs);
       pending.set(id, { resolve, reject, timeout });
-      ws.send(JSON.stringify({ type: "req", id, method, params }), (error) => {
+      const rejectSendFailure = (error) => {
         if (!error) {
           return;
         }
-        const waiter = pending.get(id);
-        if (!waiter) {
-          return;
-        }
         pending.delete(id);
-        clearTimeout(waiter.timeout);
-        waiter.reject(error instanceof Error ? error : new Error(String(error)));
-      });
+        clearTimeout(timeout);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      };
+      try {
+        ws.send(JSON.stringify({ type: "req", id, method, params }), rejectSendFailure);
+      } catch (error) {
+        rejectSendFailure(error);
+      }
     });
   const close = () => {
     rejectPending(new Error("gateway websocket client closed"));
@@ -778,6 +788,10 @@ async function writeSummary({
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+  if (args.help) {
+    process.stdout.write(`${usage()}\n`);
+    return;
+  }
   const repoRoot = path.resolve(args.repoRoot ?? process.env.OPENCLAW_REPO_ROOT ?? process.cwd());
   const outputDir = path.resolve(args.outputDir);
   await fs.mkdir(outputDir, { recursive: true });
