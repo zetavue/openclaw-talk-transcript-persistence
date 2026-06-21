@@ -29,6 +29,15 @@ vi.mock("./talk-transcript-persistence.js", () => ({
   persistFinalTalkTranscript: transcriptPersistence.persistFinalTalkTranscript,
 }));
 
+// closeRelaySession drains its transcript queue asynchronously; flush microtasks
+// so its post-drain side effects (agent-run abort, bridge.close, close event)
+// become observable in the tests below.
+async function flushRelayClose(): Promise<void> {
+  for (let index = 0; index < 20; index++) {
+    await Promise.resolve();
+  }
+}
+
 describe("talk realtime gateway relay", () => {
   afterEach(() => {
     clearTalkRealtimeRelaySessionsForTest();
@@ -398,7 +407,10 @@ describe("talk realtime gateway relay", () => {
       connId: "conn-1",
       reason: "barge-in",
     });
-    stopTalkRealtimeRelaySession({ relaySessionId: session.relaySessionId, connId: "conn-1" });
+    await stopTalkRealtimeRelaySession({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-1",
+    });
 
     expect(bridge.sendAudio).toHaveBeenCalledWith(Buffer.from("audio-in"));
     expect(bridge.sendUserMessage).not.toHaveBeenCalledWith("hello");
@@ -562,7 +574,7 @@ describe("talk realtime gateway relay", () => {
     });
   });
 
-  it("emits an issue when the provider closes before ready", () => {
+  it("emits an issue when the provider closes before ready", async () => {
     let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
     const provider: RealtimeVoiceProviderPlugin = {
       id: "openai",
@@ -599,6 +611,7 @@ describe("talk realtime gateway relay", () => {
     });
 
     bridgeRequest?.onClose?.("error");
+    await flushRelayClose();
 
     const errorPayload = findEventPayload(events, (payload) => payload.type === "error");
     expectRecordFields(errorPayload, {
@@ -791,7 +804,10 @@ describe("talk realtime gateway relay", () => {
       }),
     ).toBe(false);
 
-    stopTalkRealtimeRelaySession({ relaySessionId: session.relaySessionId, connId: "conn-1" });
+    await stopTalkRealtimeRelaySession({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-1",
+    });
   });
 
   it("forces an agent consult when configured and realtime transcript finalizes without a provider tool call", async () => {
@@ -967,7 +983,10 @@ describe("talk realtime gateway relay", () => {
       name: "openclaw_agent_consult",
       args: { question: "Can you check something else?" },
     });
-    stopTalkRealtimeRelaySession({ relaySessionId: session.relaySessionId, connId: "conn-1" });
+    await stopTalkRealtimeRelaySession({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-1",
+    });
   });
 
   it("does not force a duplicate consult after native consult or cancellation", async () => {
@@ -1517,7 +1536,7 @@ describe("talk realtime gateway relay", () => {
     expect(bridge.submitToolResult).not.toHaveBeenCalled();
   });
 
-  it("aborts linked agent consult runs when the relay session closes", () => {
+  it("aborts linked agent consult runs when the relay session closes", async () => {
     const {
       abortController,
       broadcast,
@@ -1526,7 +1545,10 @@ describe("talk realtime gateway relay", () => {
       bufferedAgentEvents,
       session,
     } = createAbortableRelayRunFixture();
-    stopTalkRealtimeRelaySession({ relaySessionId: session.relaySessionId, connId: "conn-1" });
+    await stopTalkRealtimeRelaySession({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-1",
+    });
 
     expect(abortController.signal.aborted).toBe(true);
     expect(agentDeltaSentAt.has("run-1:assistant")).toBe(false);
@@ -1535,7 +1557,7 @@ describe("talk realtime gateway relay", () => {
     expectNodeAbortPayload(nodeSendToSession);
   });
 
-  it("aborts linked agent consult runs when the provider closes the relay", () => {
+  it("aborts linked agent consult runs when the provider closes the relay", async () => {
     const abortController = new AbortController();
     let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
     const broadcast = vi.fn();
@@ -1630,6 +1652,7 @@ describe("talk realtime gateway relay", () => {
       runId: "run-1",
     });
     bridgeRequest?.onClose?.("error");
+    await flushRelayClose();
 
     expect(abortController.signal.aborted).toBe(true);
     expect(agentDeltaSentAt.has("run-1:assistant")).toBe(false);
@@ -1747,7 +1770,7 @@ describe("talk realtime relay transcript persistence", () => {
       tools: [],
       sessionKey: "agent:main:talk-1",
     });
-    return { session };
+    return { session, bridge, broadcastToConnIds: context.broadcastToConnIds };
   }
 
   beforeEach(() => {
@@ -1833,5 +1856,46 @@ describe("talk realtime relay transcript persistence", () => {
     });
     // The failed write did not block the later assistant write.
     expect(persistedMessages).toEqual([{ role: "assistant", text: "recovered" }]);
+  });
+
+  it("drains queued transcript writes before closing the bridge on orderly close", async () => {
+    const { session, bridge, broadcastToConnIds } = createPersistenceFixture();
+    let resolveWrite: () => void = () => {};
+    transcriptPersistence.persistFinalTalkTranscript.mockImplementation(
+      () =>
+        new Promise<{ status: "appended"; messageId: string }>((resolve) => {
+          resolveWrite = () => resolve({ status: "appended", messageId: "msg-1" });
+        }),
+    );
+    bridgeRequest?.onTranscript?.("user", "drain-me", true);
+    // Wait until the queued write has actually started (and is now pending).
+    await vi.waitFor(() => {
+      expect(transcriptPersistence.persistFinalTalkTranscript).toHaveBeenCalledTimes(1);
+    });
+
+    const closePromise = stopTalkRealtimeRelaySession({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-1",
+    });
+    // Let the close path reach its queue-drain await; the bridge must stay open
+    // and no close event may fire while the write is still pending.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(bridge.close).not.toHaveBeenCalled();
+    expect(
+      broadcastToConnIds.mock.calls.some(
+        ([, payload]) => (payload as { type?: string } | undefined)?.type === "close",
+      ),
+    ).toBe(false);
+
+    resolveWrite();
+    await closePromise;
+
+    expect(bridge.close).toHaveBeenCalledTimes(1);
+    expect(
+      broadcastToConnIds.mock.calls.some(
+        ([, payload]) => (payload as { type?: string } | undefined)?.type === "close",
+      ),
+    ).toBe(true);
   });
 });
