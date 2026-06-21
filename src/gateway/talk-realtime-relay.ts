@@ -392,13 +392,40 @@ function enqueueRelayTranscriptPersistence(
     });
 }
 
-function closeRelaySession(session: RelaySession, reason: "completed" | "error"): void {
-  session.forcedConsults.clear();
+async function closeRelaySession(
+  session: RelaySession,
+  reason: "completed" | "error",
+  options: { initiatedByProvider?: boolean } = {},
+): Promise<void> {
+  // Idempotent: the close RPC, cleanup timer, connect-error, and provider-close
+  // paths can race; only the first call drains the queue and emits close.
+  if (session.closing) {
+    return;
+  }
+  // Mark closing and leave the registries first so no new transcript writes are
+  // enqueued while in-flight writes finish.
+  session.closing = true;
   relaySessions.delete(session.id);
   forgetUnifiedTalkSession(session.id);
   clearTimeout(session.cleanupTimer);
-  abortRelayAgentRuns(session, reason === "error" ? "relay-error" : "relay-closed");
-  session.bridge.close();
+  try {
+    // The queue is kept fulfilled per-write (failures are caught and logged), so
+    // awaiting it guarantees every finalized turn reached the session JSONL
+    // before the bridge closes and the close event fires.
+    await session.transcriptWriteQueue;
+  } catch {
+    // Per-write errors are already logged inside the queue; never block close.
+  }
+  session.forcedConsults.clear();
+  // Provider-initiated close reports "relay-closed" for both reasons (matching
+  // the prior provider-close path); only the RPC/timer/error paths surface "relay-error".
+  const abortReason =
+    !options.initiatedByProvider && reason === "error" ? "relay-error" : "relay-closed";
+  abortRelayAgentRuns(session, abortReason);
+  // The provider-close path already tore down its own bridge; avoid a second close.
+  if (!options.initiatedByProvider) {
+    session.bridge.close();
+  }
   broadcastToOwner(session.context, session.connId, {
     relaySessionId: session.id,
     type: "close",
@@ -411,10 +438,23 @@ function closeRelaySession(session: RelaySession, reason: "completed" | "error")
   });
 }
 
+function closeRelaySessionInBackground(
+  session: RelaySession,
+  reason: "completed" | "error",
+  options?: { initiatedByProvider?: boolean },
+): void {
+  void closeRelaySession(session, reason, options).catch((error: unknown) => {
+    session.context.logGateway?.error("Talk relay background close failed", {
+      relaySessionId: session.id,
+      error: formatError(error),
+    });
+  });
+}
+
 function pruneExpiredRelaySessions(nowMs = Date.now()): void {
   closeExpiredTalkRelaySessions({
     sessions: relaySessions.values(),
-    closeSession: (session) => closeRelaySession(session, "completed"),
+    closeSession: (session) => closeRelaySessionInBackground(session, "completed"),
     nowMs,
   });
 }
@@ -693,11 +733,6 @@ export function createTalkRealtimeRelaySession(
       if (!active) {
         return;
       }
-      active.forcedConsults.clear();
-      relaySessions.delete(relaySessionId);
-      forgetUnifiedTalkSession(relaySessionId);
-      clearTimeout(active.cleanupTimer);
-      abortRelayAgentRuns(active, "relay-closed");
       if (!ready && !failureEmitted) {
         const issue = realtimeRelayIssue({
           message: "Realtime provider closed before the session became ready.",
@@ -711,10 +746,10 @@ export function createTalkRealtimeRelaySession(
           final: true,
         });
       }
-      emit(
-        { relaySessionId, type: "close", reason },
-        { type: "session.closed", payload: { reason }, final: true },
-      );
+      // Provider-initiated close: drain queued transcript writes, then emit the
+      // single close event. The provider already tore down its bridge, so skip
+      // the second bridge.close().
+      closeRelaySessionInBackground(active, reason, { initiatedByProvider: true });
     },
   });
   const relay: RelaySession = {
@@ -729,7 +764,7 @@ export function createTalkRealtimeRelaySession(
     cleanupTimer: setTimeout(() => {
       const active = relaySessions.get(relaySessionId);
       if (active) {
-        closeRelaySession(active, "completed");
+        closeRelaySessionInBackground(active, "completed");
       }
     }, RELAY_SESSION_TTL_MS),
     activeAgentRuns: new Map(),
@@ -758,7 +793,7 @@ export function createTalkRealtimeRelaySession(
     });
     const active = relaySessions.get(relaySessionId);
     if (active) {
-      closeRelaySession(active, "error");
+      closeRelaySessionInBackground(active, "error");
     }
   });
 
@@ -890,7 +925,7 @@ function getRelaySession(relaySessionId: string, connId: string): RelaySession {
     sessions: relaySessions,
     sessionId: relaySessionId,
     connId,
-    closeSession: (session) => closeRelaySession(session, "completed"),
+    closeSession: (session) => closeRelaySessionInBackground(session, "completed"),
     unknownSessionMessage: "Unknown realtime relay session",
   });
 }
@@ -1076,12 +1111,12 @@ export function cancelTalkRealtimeRelayTurn(params: {
 }
 
 /** Closes a realtime relay session owned by the current connection. */
-export function stopTalkRealtimeRelaySession(params: {
+export async function stopTalkRealtimeRelaySession(params: {
   relaySessionId: string;
   connId: string;
-}): void {
+}): Promise<void> {
   const session = getRelaySession(params.relaySessionId, params.connId);
-  closeRelaySession(session, "completed");
+  await closeRelaySession(session, "completed");
 }
 
 /** Clears process-local realtime relays between tests. */
