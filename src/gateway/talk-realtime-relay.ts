@@ -49,6 +49,7 @@ import {
   requireActiveTalkRelaySession,
 } from "./talk-relay-session-lifecycle.js";
 import { forgetUnifiedTalkSession } from "./talk-session-registry.js";
+import { persistFinalTalkTranscript } from "./talk-transcript-persistence.js";
 
 const RELAY_SESSION_TTL_MS = 30 * 60 * 1000;
 const MAX_AUDIO_BASE64_BYTES = 512 * 1024;
@@ -111,6 +112,7 @@ type RelaySession = {
   bridge: RealtimeVoiceBridgeSession;
   talk: TalkSessionController;
   sessionKey?: string;
+  providerId: string;
   expiresAtMs: number;
   cleanupTimer: ReturnType<typeof setTimeout>;
   activeAgentRuns: Map<string, string>;
@@ -118,6 +120,10 @@ type RelaySession = {
   completedAgentToolCalls: Set<string>;
   forcedConsults: RealtimeVoiceForcedConsultCoordinator;
   transcript: RealtimeVoiceTranscriptEntry[];
+  // Serialized per-session queue for finalized transcript writes so turns reach
+  // the session JSONL in order. Drained during orderly close (see closeRelaySession).
+  transcriptWriteQueue: Promise<void>;
+  closing: boolean;
 };
 
 type TalkRealtimeRelayIssue = {
@@ -346,6 +352,46 @@ function submitRelayAgentControlProviderResults(
   session.activeAgentRuns.clear();
 }
 
+function enqueueRelayTranscriptPersistence(
+  session: RelaySession,
+  params: {
+    turnId: string;
+    role: "user" | "assistant";
+    text: string;
+    cfg?: OpenClawConfig;
+  },
+): void {
+  if (session.closing) {
+    return;
+  }
+  // Chain each finalized write after the previous one so turns persist in the
+  // order they were spoken. Swallow the prior write's failure so one bad write
+  // cannot stall later turns; the queue itself must stay fulfilled.
+  session.transcriptWriteQueue = session.transcriptWriteQueue
+    .catch(() => {})
+    .then(() =>
+      persistFinalTalkTranscript({
+        sessionKey: session.sessionKey,
+        relaySessionId: session.id,
+        turnId: params.turnId,
+        provider: session.providerId,
+        role: params.role,
+        text: params.text,
+        ...(params.cfg ? { config: params.cfg } : {}),
+      }),
+    )
+    .then(() => undefined)
+    .catch((error: unknown) => {
+      // Surface only identifiers; never log the transcript text itself.
+      session.context.logGateway?.warn("Talk transcript persistence failed", {
+        relaySessionId: session.id,
+        turnId: params.turnId,
+        role: params.role,
+        error: formatError(error),
+      });
+    });
+}
+
 function closeRelaySession(session: RelaySession, reason: "completed" | "error"): void {
   session.forcedConsults.clear();
   relaySessions.delete(session.id);
@@ -522,6 +568,14 @@ export function createTalkRealtimeRelaySession(
       const turnId = relay ? ensureRelayTurn(relay) : undefined;
       if (final && relay) {
         recordRealtimeVoiceTranscript(relay.transcript, role, text);
+        if (text.trim() && turnId) {
+          enqueueRelayTranscriptPersistence(relay, {
+            turnId,
+            role,
+            text: text.trim(),
+            cfg: params.cfg,
+          });
+        }
       }
       const eventType =
         role === "assistant"
@@ -670,6 +724,7 @@ export function createTalkRealtimeRelaySession(
     bridge,
     talk,
     sessionKey: params.sessionKey?.trim() || undefined,
+    providerId: params.provider.id,
     expiresAtMs,
     cleanupTimer: setTimeout(() => {
       const active = relaySessions.get(relaySessionId);
@@ -682,6 +737,8 @@ export function createTalkRealtimeRelaySession(
     completedAgentToolCalls: new Set(),
     forcedConsults: createRealtimeVoiceForcedConsultCoordinator(),
     transcript: [],
+    transcriptWriteQueue: Promise.resolve(),
+    closing: false,
   };
   relayRef.current = relay;
   relay.cleanupTimer.unref?.();
@@ -1036,4 +1093,15 @@ export function clearTalkRealtimeRelaySessionsForTest(): void {
     session.bridge.close();
   }
   relaySessions.clear();
+}
+
+/**
+ * Test-only: resolves once the session's queued finalized transcript writes
+ * have settled, so ordering/dedup assertions can observe them deterministically.
+ */
+export async function drainTalkRealtimeRelayTranscriptWritesForTest(params: {
+  relaySessionId: string;
+}): Promise<void> {
+  const session = relaySessions.get(params.relaySessionId);
+  await session?.transcriptWriteQueue;
 }
