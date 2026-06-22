@@ -1,6 +1,6 @@
 // Gateway Talk realtime relay.
 // Bridges browser Talk audio sessions with realtime voice provider plugins.
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../config/types.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
@@ -49,6 +49,7 @@ import {
   requireActiveTalkRelaySession,
 } from "./talk-relay-session-lifecycle.js";
 import { forgetUnifiedTalkSession } from "./talk-session-registry.js";
+import { persistFinalTalkTranscript } from "./talk-transcript-persistence.js";
 
 const RELAY_SESSION_TTL_MS = 30 * 60 * 1000;
 const MAX_AUDIO_BASE64_BYTES = 512 * 1024;
@@ -111,6 +112,7 @@ type RelaySession = {
   bridge: RealtimeVoiceBridgeSession;
   talk: TalkSessionController;
   sessionKey?: string;
+  providerId: string;
   expiresAtMs: number;
   cleanupTimer: ReturnType<typeof setTimeout>;
   activeAgentRuns: Map<string, string>;
@@ -118,6 +120,14 @@ type RelaySession = {
   completedAgentToolCalls: Set<string>;
   forcedConsults: RealtimeVoiceForcedConsultCoordinator;
   transcript: RealtimeVoiceTranscriptEntry[];
+  // Serialized per-session queue for finalized transcript writes so turns reach
+  // the session JSONL in order. Drained during orderly close (see closeRelaySession).
+  transcriptWriteQueue: Promise<void>;
+  closing: boolean;
+  // Persistence-scoped transcript turn, separate from the observability turn, so
+  // identical text in separate exchanges is not deduplicated away.
+  transcriptTurn: TranscriptTurnState | undefined;
+  transcriptTurnSeq: number;
 };
 
 type TalkRealtimeRelayIssue = {
@@ -346,13 +356,138 @@ function submitRelayAgentControlProviderResults(
   session.activeAgentRuns.clear();
 }
 
-function closeRelaySession(session: RelaySession, reason: "completed" | "error"): void {
-  session.forcedConsults.clear();
+type TranscriptTurnState = {
+  id: string;
+  userFingerprint?: string;
+  assistantFingerprint?: string;
+  assistantCompleted: boolean;
+};
+
+function fingerprintTranscriptText(text: string): string {
+  return createHash("sha256").update(text).digest("hex");
+}
+
+// Resolves the transcript turn id to persist a finalized transcript under, or
+// undefined when the event is a provider retry that must deduplicate. Mutates
+// session.transcriptTurn per the exchange state machine, independent of the
+// observability turn, so identical text spoken in separate exchanges is not
+// suppressed while duplicate delivery of one event still deduplicates.
+function resolveTranscriptTurnForPersistence(
+  session: RelaySession,
+  role: "user" | "assistant",
+  normalizedText: string,
+): string | undefined {
+  const fingerprint = fingerprintTranscriptText(normalizedText);
+  const current = session.transcriptTurn;
+  if (role === "user") {
+    // A user final after an assistant reply always opens a new exchange, even
+    // when the text repeats a prior turn. A matching fingerprint on an
+    // unanswered user final is a provider retry and deduplicates.
+    if (!current || current.assistantCompleted || current.userFingerprint !== fingerprint) {
+      session.transcriptTurnSeq += 1;
+      session.transcriptTurn = {
+        id: `t${session.transcriptTurnSeq}`,
+        userFingerprint: fingerprint,
+        assistantCompleted: false,
+      };
+      return session.transcriptTurn.id;
+    }
+    return undefined;
+  }
+  // Assistant final: a matching fingerprint is a retry and deduplicates; otherwise
+  // persist under the current turn (starting one for a greeting-first reply) and
+  // mark the exchange completed so the next user final opens a new turn.
+  if (current && current.assistantFingerprint === fingerprint) {
+    return undefined;
+  }
+  if (!current) {
+    session.transcriptTurnSeq += 1;
+    session.transcriptTurn = {
+      id: `t${session.transcriptTurnSeq}`,
+      assistantFingerprint: fingerprint,
+      assistantCompleted: true,
+    };
+    return session.transcriptTurn.id;
+  }
+  current.assistantFingerprint = fingerprint;
+  current.assistantCompleted = true;
+  return current.id;
+}
+
+function enqueueRelayTranscriptPersistence(
+  session: RelaySession,
+  params: {
+    turnId: string;
+    role: "user" | "assistant";
+    text: string;
+    cfg?: OpenClawConfig;
+  },
+): void {
+  if (session.closing) {
+    return;
+  }
+  // Chain each finalized write after the previous one so turns persist in the
+  // order they were spoken. Swallow the prior write's failure so one bad write
+  // cannot stall later turns; the queue itself must stay fulfilled.
+  session.transcriptWriteQueue = session.transcriptWriteQueue
+    .catch(() => {})
+    .then(() =>
+      persistFinalTalkTranscript({
+        sessionKey: session.sessionKey,
+        relaySessionId: session.id,
+        turnId: params.turnId,
+        provider: session.providerId,
+        role: params.role,
+        text: params.text,
+        ...(params.cfg ? { config: params.cfg } : {}),
+      }),
+    )
+    .then(() => undefined)
+    .catch((error: unknown) => {
+      // Surface only identifiers; never log the transcript text itself.
+      session.context.logGateway?.warn("Talk transcript persistence failed", {
+        relaySessionId: session.id,
+        turnId: params.turnId,
+        role: params.role,
+        error: formatError(error),
+      });
+    });
+}
+
+async function closeRelaySession(
+  session: RelaySession,
+  reason: "completed" | "error",
+  options: { initiatedByProvider?: boolean } = {},
+): Promise<void> {
+  // Idempotent: the close RPC, cleanup timer, connect-error, and provider-close
+  // paths can race; only the first call drains the queue and emits close.
+  if (session.closing) {
+    return;
+  }
+  // Mark closing and leave the registries first so no new transcript writes are
+  // enqueued while in-flight writes finish.
+  session.closing = true;
   relaySessions.delete(session.id);
   forgetUnifiedTalkSession(session.id);
   clearTimeout(session.cleanupTimer);
-  abortRelayAgentRuns(session, reason === "error" ? "relay-error" : "relay-closed");
-  session.bridge.close();
+  try {
+    // The queue is kept fulfilled per-write (failures are caught and logged), so
+    // awaiting it guarantees every finalized turn reached the session JSONL
+    // before the bridge closes and the close event fires.
+    await session.transcriptWriteQueue;
+  } catch {
+    // Per-write errors are already logged inside the queue; never block close.
+  }
+  session.forcedConsults.clear();
+  // Provider-initiated close reports "relay-closed" for both reasons (matching
+  // the prior provider-close path); only the RPC/timer/error paths surface "relay-error".
+  const abortReason =
+    !options.initiatedByProvider && reason === "error" ? "relay-error" : "relay-closed";
+  abortRelayAgentRuns(session, abortReason);
+  // The provider-close path already tore down its own bridge; avoid a second close.
+  if (!options.initiatedByProvider) {
+    session.bridge.close();
+  }
   broadcastToOwner(session.context, session.connId, {
     relaySessionId: session.id,
     type: "close",
@@ -365,10 +500,23 @@ function closeRelaySession(session: RelaySession, reason: "completed" | "error")
   });
 }
 
+function closeRelaySessionInBackground(
+  session: RelaySession,
+  reason: "completed" | "error",
+  options?: { initiatedByProvider?: boolean },
+): void {
+  void closeRelaySession(session, reason, options).catch((error: unknown) => {
+    session.context.logGateway?.error("Talk relay background close failed", {
+      relaySessionId: session.id,
+      error: formatError(error),
+    });
+  });
+}
+
 function pruneExpiredRelaySessions(nowMs = Date.now()): void {
   closeExpiredTalkRelaySessions({
     sessions: relaySessions.values(),
-    closeSession: (session) => closeRelaySession(session, "completed"),
+    closeSession: (session) => closeRelaySessionInBackground(session, "completed"),
     nowMs,
   });
 }
@@ -522,6 +670,20 @@ export function createTalkRealtimeRelaySession(
       const turnId = relay ? ensureRelayTurn(relay) : undefined;
       if (final && relay) {
         recordRealtimeVoiceTranscript(relay.transcript, role, text);
+        const normalizedText = text.trim();
+        // Persistence uses a transcript-scoped turn (not the observability turn)
+        // so identical text in separate exchanges persists under distinct ids.
+        const transcriptTurnId = normalizedText
+          ? resolveTranscriptTurnForPersistence(relay, role, normalizedText)
+          : undefined;
+        if (transcriptTurnId) {
+          enqueueRelayTranscriptPersistence(relay, {
+            turnId: transcriptTurnId,
+            role,
+            text: normalizedText,
+            cfg: params.cfg,
+          });
+        }
       }
       const eventType =
         role === "assistant"
@@ -639,11 +801,6 @@ export function createTalkRealtimeRelaySession(
       if (!active) {
         return;
       }
-      active.forcedConsults.clear();
-      relaySessions.delete(relaySessionId);
-      forgetUnifiedTalkSession(relaySessionId);
-      clearTimeout(active.cleanupTimer);
-      abortRelayAgentRuns(active, "relay-closed");
       if (!ready && !failureEmitted) {
         const issue = realtimeRelayIssue({
           message: "Realtime provider closed before the session became ready.",
@@ -657,10 +814,10 @@ export function createTalkRealtimeRelaySession(
           final: true,
         });
       }
-      emit(
-        { relaySessionId, type: "close", reason },
-        { type: "session.closed", payload: { reason }, final: true },
-      );
+      // Provider-initiated close: drain queued transcript writes, then emit the
+      // single close event. The provider already tore down its bridge, so skip
+      // the second bridge.close().
+      closeRelaySessionInBackground(active, reason, { initiatedByProvider: true });
     },
   });
   const relay: RelaySession = {
@@ -670,11 +827,12 @@ export function createTalkRealtimeRelaySession(
     bridge,
     talk,
     sessionKey: params.sessionKey?.trim() || undefined,
+    providerId: params.provider.id,
     expiresAtMs,
     cleanupTimer: setTimeout(() => {
       const active = relaySessions.get(relaySessionId);
       if (active) {
-        closeRelaySession(active, "completed");
+        closeRelaySessionInBackground(active, "completed");
       }
     }, RELAY_SESSION_TTL_MS),
     activeAgentRuns: new Map(),
@@ -682,6 +840,10 @@ export function createTalkRealtimeRelaySession(
     completedAgentToolCalls: new Set(),
     forcedConsults: createRealtimeVoiceForcedConsultCoordinator(),
     transcript: [],
+    transcriptWriteQueue: Promise.resolve(),
+    closing: false,
+    transcriptTurn: undefined,
+    transcriptTurnSeq: 0,
   };
   relayRef.current = relay;
   relay.cleanupTimer.unref?.();
@@ -701,7 +863,7 @@ export function createTalkRealtimeRelaySession(
     });
     const active = relaySessions.get(relaySessionId);
     if (active) {
-      closeRelaySession(active, "error");
+      closeRelaySessionInBackground(active, "error");
     }
   });
 
@@ -833,7 +995,7 @@ function getRelaySession(relaySessionId: string, connId: string): RelaySession {
     sessions: relaySessions,
     sessionId: relaySessionId,
     connId,
-    closeSession: (session) => closeRelaySession(session, "completed"),
+    closeSession: (session) => closeRelaySessionInBackground(session, "completed"),
     unknownSessionMessage: "Unknown realtime relay session",
   });
 }
@@ -1019,12 +1181,12 @@ export function cancelTalkRealtimeRelayTurn(params: {
 }
 
 /** Closes a realtime relay session owned by the current connection. */
-export function stopTalkRealtimeRelaySession(params: {
+export async function stopTalkRealtimeRelaySession(params: {
   relaySessionId: string;
   connId: string;
-}): void {
+}): Promise<void> {
   const session = getRelaySession(params.relaySessionId, params.connId);
-  closeRelaySession(session, "completed");
+  await closeRelaySession(session, "completed");
 }
 
 /** Clears process-local realtime relays between tests. */
@@ -1036,4 +1198,15 @@ export function clearTalkRealtimeRelaySessionsForTest(): void {
     session.bridge.close();
   }
   relaySessions.clear();
+}
+
+/**
+ * Test-only: resolves once the session's queued finalized transcript writes
+ * have settled, so ordering/dedup assertions can observe them deterministically.
+ */
+export async function drainTalkRealtimeRelayTranscriptWritesForTest(params: {
+  relaySessionId: string;
+}): Promise<void> {
+  const session = relaySessions.get(params.relaySessionId);
+  await session?.transcriptWriteQueue;
 }

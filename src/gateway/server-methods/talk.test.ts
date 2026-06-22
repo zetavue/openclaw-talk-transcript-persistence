@@ -742,6 +742,101 @@ describe("talk.session unified handlers", () => {
     expect(closeRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
   });
 
+  it("talk.session.close waits for realtime relay shutdown before responding", async () => {
+    const provider = {
+      id: "openai",
+      label: "OpenAI Realtime",
+      defaultModel: "gpt-realtime-default",
+      models: ["gpt-realtime-default", "gpt-realtime"],
+      isConfigured: () => true,
+      createBridge: vi.fn(),
+    };
+    mocks.listRealtimeVoiceProviders.mockReturnValue([provider] as never);
+    mocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
+      provider,
+      providerConfig: { apiKey: "openai-key" },
+    });
+    mocks.createTalkRealtimeRelaySession.mockReturnValue({
+      provider: "openai",
+      transport: "gateway-relay",
+      relaySessionId: "relay-drain-1",
+      audio: {
+        inputEncoding: "pcm16",
+        inputSampleRateHz: 24000,
+        outputEncoding: "pcm16",
+        outputSampleRateHz: 24000,
+      },
+      model: "gpt-realtime",
+      voice: "alloy",
+      expiresAt: 1_797_986_400,
+    });
+
+    const createRespond = vi.fn();
+    await talkHandlers["talk.session.create"]({
+      req: { type: "req", id: "create-drain", method: "talk.session.create" },
+      params: {
+        mode: "realtime",
+        transport: "gateway-relay",
+        brain: "agent-consult",
+        provider: "openai",
+        model: "gpt-realtime",
+        voice: "alloy",
+      },
+      client: { connId: "conn-1" } as never,
+      isWebchatConnect: () => false,
+      respond: createRespond as never,
+      context: {
+        getRuntimeConfig: () =>
+          ({
+            agents: {
+              defaults: { voiceModel: { primary: "openai/gpt-realtime-default" } },
+            },
+            talk: {
+              realtime: {
+                provider: "openai",
+                providers: { openai: { apiKey: "openai-key" } },
+                instructions: "Speak warmly.",
+                consultRouting: "force-agent-consult",
+              },
+            },
+          }) as OpenClawConfig,
+      } as never,
+    });
+
+    mocks.stopTalkRealtimeRelaySession.mockReset();
+    let resolveShutdown: () => void = () => {};
+    mocks.stopTalkRealtimeRelaySession.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveShutdown = resolve;
+        }),
+    );
+
+    const drainRespond = vi.fn();
+    const closePromise = talkHandlers["talk.session.close"]({
+      req: { type: "req", id: "close-drain", method: "talk.session.close" },
+      params: { sessionId: "relay-drain-1" },
+      client: { connId: "conn-1" } as never,
+      isWebchatConnect: () => false,
+      respond: drainRespond as never,
+      context: {} as never,
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // While relay shutdown is still draining persistence, the RPC must not respond.
+    expect(drainRespond).not.toHaveBeenCalled();
+    expect(mocks.stopTalkRealtimeRelaySession).toHaveBeenCalledWith({
+      relaySessionId: "relay-drain-1",
+      connId: "conn-1",
+    });
+
+    resolveShutdown();
+    await closePromise;
+
+    expect(drainRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+  });
+
   it("returns classified talk issue details when realtime relay creation fails", async () => {
     const provider = {
       id: "openai",

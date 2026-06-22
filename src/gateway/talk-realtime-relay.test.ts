@@ -1,7 +1,7 @@
 /**
  * Tests talk realtime relay event forwarding and connection cleanup.
  */
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   setActiveEmbeddedRun,
   testing as embeddedRunTesting,
@@ -12,12 +12,31 @@ import {
   cancelTalkRealtimeRelayTurn,
   clearTalkRealtimeRelaySessionsForTest,
   createTalkRealtimeRelaySession,
+  drainTalkRealtimeRelayTranscriptWritesForTest,
   registerTalkRealtimeRelayAgentRun,
   sendTalkRealtimeRelayAudio,
   steerTalkRealtimeRelayAgentRun,
   stopTalkRealtimeRelaySession,
   submitTalkRealtimeRelayToolResult,
 } from "./talk-realtime-relay.js";
+import type { PersistFinalTalkTranscriptParams } from "./talk-transcript-persistence.js";
+
+const transcriptPersistence = vi.hoisted(() => ({
+  persistFinalTalkTranscript: vi.fn(),
+}));
+
+vi.mock("./talk-transcript-persistence.js", () => ({
+  persistFinalTalkTranscript: transcriptPersistence.persistFinalTalkTranscript,
+}));
+
+// closeRelaySession drains its transcript queue asynchronously; flush microtasks
+// so its post-drain side effects (agent-run abort, bridge.close, close event)
+// become observable in the tests below.
+async function flushRelayClose(): Promise<void> {
+  for (let index = 0; index < 20; index++) {
+    await Promise.resolve();
+  }
+}
 
 describe("talk realtime gateway relay", () => {
   afterEach(() => {
@@ -388,7 +407,10 @@ describe("talk realtime gateway relay", () => {
       connId: "conn-1",
       reason: "barge-in",
     });
-    stopTalkRealtimeRelaySession({ relaySessionId: session.relaySessionId, connId: "conn-1" });
+    await stopTalkRealtimeRelaySession({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-1",
+    });
 
     expect(bridge.sendAudio).toHaveBeenCalledWith(Buffer.from("audio-in"));
     expect(bridge.sendUserMessage).not.toHaveBeenCalledWith("hello");
@@ -552,7 +574,7 @@ describe("talk realtime gateway relay", () => {
     });
   });
 
-  it("emits an issue when the provider closes before ready", () => {
+  it("emits an issue when the provider closes before ready", async () => {
     let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
     const provider: RealtimeVoiceProviderPlugin = {
       id: "openai",
@@ -589,6 +611,7 @@ describe("talk realtime gateway relay", () => {
     });
 
     bridgeRequest?.onClose?.("error");
+    await flushRelayClose();
 
     const errorPayload = findEventPayload(events, (payload) => payload.type === "error");
     expectRecordFields(errorPayload, {
@@ -781,7 +804,10 @@ describe("talk realtime gateway relay", () => {
       }),
     ).toBe(false);
 
-    stopTalkRealtimeRelaySession({ relaySessionId: session.relaySessionId, connId: "conn-1" });
+    await stopTalkRealtimeRelaySession({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-1",
+    });
   });
 
   it("forces an agent consult when configured and realtime transcript finalizes without a provider tool call", async () => {
@@ -957,7 +983,10 @@ describe("talk realtime gateway relay", () => {
       name: "openclaw_agent_consult",
       args: { question: "Can you check something else?" },
     });
-    stopTalkRealtimeRelaySession({ relaySessionId: session.relaySessionId, connId: "conn-1" });
+    await stopTalkRealtimeRelaySession({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-1",
+    });
   });
 
   it("does not force a duplicate consult after native consult or cancellation", async () => {
@@ -1507,7 +1536,7 @@ describe("talk realtime gateway relay", () => {
     expect(bridge.submitToolResult).not.toHaveBeenCalled();
   });
 
-  it("aborts linked agent consult runs when the relay session closes", () => {
+  it("aborts linked agent consult runs when the relay session closes", async () => {
     const {
       abortController,
       broadcast,
@@ -1516,7 +1545,10 @@ describe("talk realtime gateway relay", () => {
       bufferedAgentEvents,
       session,
     } = createAbortableRelayRunFixture();
-    stopTalkRealtimeRelaySession({ relaySessionId: session.relaySessionId, connId: "conn-1" });
+    await stopTalkRealtimeRelaySession({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-1",
+    });
 
     expect(abortController.signal.aborted).toBe(true);
     expect(agentDeltaSentAt.has("run-1:assistant")).toBe(false);
@@ -1525,7 +1557,7 @@ describe("talk realtime gateway relay", () => {
     expectNodeAbortPayload(nodeSendToSession);
   });
 
-  it("aborts linked agent consult runs when the provider closes the relay", () => {
+  it("aborts linked agent consult runs when the provider closes the relay", async () => {
     const abortController = new AbortController();
     let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
     const broadcast = vi.fn();
@@ -1620,6 +1652,7 @@ describe("talk realtime gateway relay", () => {
       runId: "run-1",
     });
     bridgeRequest?.onClose?.("error");
+    await flushRelayClose();
 
     expect(abortController.signal.aborted).toBe(true);
     expect(agentDeltaSentAt.has("run-1:assistant")).toBe(false);
@@ -1668,5 +1701,224 @@ describe("talk realtime gateway relay", () => {
       inputEncoding: "pcm16",
       outputEncoding: "pcm16",
     });
+  });
+});
+
+describe("talk realtime relay transcript persistence", () => {
+  let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
+  let recordedCalls: PersistFinalTalkTranscriptParams[];
+  let persistedMessages: Array<{ role: string; text: string }>;
+  let seenKeys: Set<string>;
+  let logGatewayWarn: ReturnType<typeof vi.fn>;
+
+  // Stand-in for persistFinalTalkTranscript that mirrors its contract (skip on
+  // empty/missing session, dedupe by turn+role+text) so the relay's enqueue
+  // ordering, dedup forwarding, and failure isolation can be asserted in isolation.
+  function installPersistenceStandIn() {
+    transcriptPersistence.persistFinalTalkTranscript.mockImplementation(
+      async (params: PersistFinalTalkTranscriptParams) => {
+        recordedCalls.push(params);
+        const text = params.text.trim();
+        if (!params.sessionKey || !text) {
+          return { status: "skipped" as const };
+        }
+        const key = `${params.relaySessionId}:${params.turnId}:${params.role}:${text}`;
+        if (seenKeys.has(key)) {
+          return { status: "duplicate" as const };
+        }
+        seenKeys.add(key);
+        persistedMessages.push({ role: params.role, text });
+        return {
+          status: "appended" as const,
+          messageId: `msg-${persistedMessages.length}`,
+        };
+      },
+    );
+  }
+
+  function createPersistenceFixture() {
+    logGatewayWarn = vi.fn();
+    const bridge = {
+      connect: vi.fn(async () => undefined),
+      sendAudio: vi.fn(),
+      setMediaTimestamp: vi.fn(),
+      handleBargeIn: vi.fn(),
+      submitToolResult: vi.fn(),
+      acknowledgeMark: vi.fn(),
+      close: vi.fn(),
+      isConnected: vi.fn(() => true),
+    };
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "google",
+      label: "Google",
+      isConfigured: () => true,
+      createBridge: (req) => {
+        bridgeRequest = req;
+        return bridge;
+      },
+    };
+    const context = {
+      broadcastToConnIds: vi.fn(),
+      logGateway: { warn: logGatewayWarn },
+    } as never;
+    const session = createTalkRealtimeRelaySession({
+      context,
+      connId: "conn-1",
+      provider,
+      providerConfig: {},
+      instructions: "brief",
+      tools: [],
+      sessionKey: "agent:main:talk-1",
+    });
+    return { session, bridge, broadcastToConnIds: context.broadcastToConnIds };
+  }
+
+  beforeEach(() => {
+    bridgeRequest = undefined;
+    recordedCalls = [];
+    persistedMessages = [];
+    seenKeys = new Set();
+    transcriptPersistence.persistFinalTalkTranscript.mockReset();
+    installPersistenceStandIn();
+  });
+
+  afterEach(() => {
+    clearTalkRealtimeRelaySessionsForTest();
+  });
+
+  it("persists finalized transcripts in spoken order and ignores partial events", async () => {
+    const { session } = createPersistenceFixture();
+    bridgeRequest?.onTranscript?.("user", "first", false);
+    bridgeRequest?.onTranscript?.("user", "first", true);
+    bridgeRequest?.onTranscript?.("assistant", "second", true);
+
+    await drainTalkRealtimeRelayTranscriptWritesForTest({
+      relaySessionId: session.relaySessionId,
+    });
+
+    expect(persistedMessages).toEqual([
+      { role: "user", text: "first" },
+      { role: "assistant", text: "second" },
+    ]);
+  });
+
+  it("forwards provider, turn, and session identifiers to the persistence helper", async () => {
+    const { session } = createPersistenceFixture();
+    bridgeRequest?.onTranscript?.("user", "first", true);
+
+    await drainTalkRealtimeRelayTranscriptWritesForTest({
+      relaySessionId: session.relaySessionId,
+    });
+
+    expect(recordedCalls).toHaveLength(1);
+    expect(recordedCalls[0]).toMatchObject({
+      relaySessionId: session.relaySessionId,
+      provider: "google",
+      role: "user",
+      text: "first",
+      sessionKey: "agent:main:talk-1",
+    });
+    expect(typeof recordedCalls[0]?.turnId).toBe("string");
+  });
+
+  it("deduplicates repeated final events for the same turn", async () => {
+    const { session } = createPersistenceFixture();
+    bridgeRequest?.onTranscript?.("user", "first", true);
+    bridgeRequest?.onTranscript?.("user", "first", true);
+
+    await drainTalkRealtimeRelayTranscriptWritesForTest({
+      relaySessionId: session.relaySessionId,
+    });
+
+    expect(persistedMessages).toEqual([{ role: "user", text: "first" }]);
+  });
+
+  it("persists identical user text spoken in separate exchanges under distinct turn ids", async () => {
+    const { session } = createPersistenceFixture();
+    bridgeRequest?.onTranscript?.("user", "hello there", true);
+    bridgeRequest?.onTranscript?.("assistant", "hi", true);
+    bridgeRequest?.onTranscript?.("user", "hello there", true);
+    bridgeRequest?.onTranscript?.("assistant", "welcome back", true);
+
+    await drainTalkRealtimeRelayTranscriptWritesForTest({
+      relaySessionId: session.relaySessionId,
+    });
+
+    const userTurnIds = recordedCalls
+      .filter((call) => call.role === "user")
+      .map((call) => call.turnId);
+    expect(userTurnIds).toHaveLength(2);
+    expect(userTurnIds[0]).not.toBe(userTurnIds[1]);
+    expect(
+      persistedMessages.filter(
+        (message) => message.role === "user" && message.text === "hello there",
+      ),
+    ).toHaveLength(2);
+  });
+
+  it("logs persistence failures with identifiers only and keeps later writes flowing", async () => {
+    const { session } = createPersistenceFixture();
+    transcriptPersistence.persistFinalTalkTranscript.mockImplementationOnce(async () => {
+      throw new Error("disk full");
+    });
+    bridgeRequest?.onTranscript?.("user", "boom", true);
+    bridgeRequest?.onTranscript?.("assistant", "recovered", true);
+
+    await drainTalkRealtimeRelayTranscriptWritesForTest({
+      relaySessionId: session.relaySessionId,
+    });
+
+    expect(logGatewayWarn).toHaveBeenCalledTimes(1);
+    const warnMeta = logGatewayWarn.mock.calls[0]?.[1];
+    // The transcript text must never appear in the failure log.
+    expect(JSON.stringify({ ...warnMeta })).not.toMatch(/boom|recovered/);
+    expect(warnMeta).toMatchObject({
+      relaySessionId: session.relaySessionId,
+      role: "user",
+      error: "disk full",
+    });
+    // The failed write did not block the later assistant write.
+    expect(persistedMessages).toEqual([{ role: "assistant", text: "recovered" }]);
+  });
+
+  it("drains queued transcript writes before closing the bridge on orderly close", async () => {
+    const { session, bridge, broadcastToConnIds } = createPersistenceFixture();
+    let resolveWrite: () => void = () => {};
+    transcriptPersistence.persistFinalTalkTranscript.mockImplementation(
+      () =>
+        new Promise<{ status: "appended"; messageId: string }>((resolve) => {
+          resolveWrite = () => resolve({ status: "appended", messageId: "msg-1" });
+        }),
+    );
+    bridgeRequest?.onTranscript?.("user", "drain-me", true);
+    // Wait until the queued write has actually started (and is now pending).
+    await vi.waitFor(() => {
+      expect(transcriptPersistence.persistFinalTalkTranscript).toHaveBeenCalledTimes(1);
+    });
+
+    const closePromise = stopTalkRealtimeRelaySession({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-1",
+    });
+    // Let the close path reach its queue-drain await; the bridge must stay open
+    // and no close event may fire while the write is still pending.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(bridge.close).not.toHaveBeenCalled();
+    expect(
+      broadcastToConnIds.mock.calls.some(
+        ([, payload]) => (payload as { type?: string } | undefined)?.type === "close",
+      ),
+    ).toBe(false);
+
+    resolveWrite();
+    await closePromise;
+
+    expect(bridge.close).toHaveBeenCalledTimes(1);
+    expect(
+      broadcastToConnIds.mock.calls.some(
+        ([, payload]) => (payload as { type?: string } | undefined)?.type === "close",
+      ),
+    ).toBe(true);
   });
 });
