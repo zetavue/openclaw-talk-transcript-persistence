@@ -1833,6 +1833,29 @@ describe("talk realtime relay transcript persistence", () => {
     expect(persistedMessages).toEqual([{ role: "user", text: "first" }]);
   });
 
+  it("persists identical user text spoken in separate exchanges under distinct turn ids", async () => {
+    const { session } = createPersistenceFixture();
+    bridgeRequest?.onTranscript?.("user", "hello there", true);
+    bridgeRequest?.onTranscript?.("assistant", "hi", true);
+    bridgeRequest?.onTranscript?.("user", "hello there", true);
+    bridgeRequest?.onTranscript?.("assistant", "welcome back", true);
+
+    await drainTalkRealtimeRelayTranscriptWritesForTest({
+      relaySessionId: session.relaySessionId,
+    });
+
+    const userTurnIds = recordedCalls
+      .filter((call) => call.role === "user")
+      .map((call) => call.turnId);
+    expect(userTurnIds).toHaveLength(2);
+    expect(userTurnIds[0]).not.toBe(userTurnIds[1]);
+    expect(
+      persistedMessages.filter(
+        (message) => message.role === "user" && message.text === "hello there",
+      ),
+    ).toHaveLength(2);
+  });
+
   it("logs persistence failures with identifiers only and keeps later writes flowing", async () => {
     const { session } = createPersistenceFixture();
     transcriptPersistence.persistFinalTalkTranscript.mockImplementationOnce(async () => {

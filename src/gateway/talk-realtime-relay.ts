@@ -1,6 +1,6 @@
 // Gateway Talk realtime relay.
 // Bridges browser Talk audio sessions with realtime voice provider plugins.
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../config/types.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
@@ -124,6 +124,10 @@ type RelaySession = {
   // the session JSONL in order. Drained during orderly close (see closeRelaySession).
   transcriptWriteQueue: Promise<void>;
   closing: boolean;
+  // Persistence-scoped transcript turn, separate from the observability turn, so
+  // identical text in separate exchanges is not deduplicated away.
+  transcriptTurn: TranscriptTurnState | undefined;
+  transcriptTurnSeq: number;
 };
 
 type TalkRealtimeRelayIssue = {
@@ -350,6 +354,64 @@ function submitRelayAgentControlProviderResults(
     session.completedAgentToolCalls.add(callId);
   }
   session.activeAgentRuns.clear();
+}
+
+type TranscriptTurnState = {
+  id: string;
+  userFingerprint?: string;
+  assistantFingerprint?: string;
+  assistantCompleted: boolean;
+};
+
+function fingerprintTranscriptText(text: string): string {
+  return createHash("sha256").update(text).digest("hex");
+}
+
+// Resolves the transcript turn id to persist a finalized transcript under, or
+// undefined when the event is a provider retry that must deduplicate. Mutates
+// session.transcriptTurn per the exchange state machine, independent of the
+// observability turn, so identical text spoken in separate exchanges is not
+// suppressed while duplicate delivery of one event still deduplicates.
+function resolveTranscriptTurnForPersistence(
+  session: RelaySession,
+  role: "user" | "assistant",
+  normalizedText: string,
+): string | undefined {
+  const fingerprint = fingerprintTranscriptText(normalizedText);
+  const current = session.transcriptTurn;
+  if (role === "user") {
+    // A user final after an assistant reply always opens a new exchange, even
+    // when the text repeats a prior turn. A matching fingerprint on an
+    // unanswered user final is a provider retry and deduplicates.
+    if (!current || current.assistantCompleted || current.userFingerprint !== fingerprint) {
+      session.transcriptTurnSeq += 1;
+      session.transcriptTurn = {
+        id: `t${session.transcriptTurnSeq}`,
+        userFingerprint: fingerprint,
+        assistantCompleted: false,
+      };
+      return session.transcriptTurn.id;
+    }
+    return undefined;
+  }
+  // Assistant final: a matching fingerprint is a retry and deduplicates; otherwise
+  // persist under the current turn (starting one for a greeting-first reply) and
+  // mark the exchange completed so the next user final opens a new turn.
+  if (current && current.assistantFingerprint === fingerprint) {
+    return undefined;
+  }
+  if (!current) {
+    session.transcriptTurnSeq += 1;
+    session.transcriptTurn = {
+      id: `t${session.transcriptTurnSeq}`,
+      assistantFingerprint: fingerprint,
+      assistantCompleted: true,
+    };
+    return session.transcriptTurn.id;
+  }
+  current.assistantFingerprint = fingerprint;
+  current.assistantCompleted = true;
+  return current.id;
 }
 
 function enqueueRelayTranscriptPersistence(
@@ -608,11 +670,17 @@ export function createTalkRealtimeRelaySession(
       const turnId = relay ? ensureRelayTurn(relay) : undefined;
       if (final && relay) {
         recordRealtimeVoiceTranscript(relay.transcript, role, text);
-        if (text.trim() && turnId) {
+        const normalizedText = text.trim();
+        // Persistence uses a transcript-scoped turn (not the observability turn)
+        // so identical text in separate exchanges persists under distinct ids.
+        const transcriptTurnId = normalizedText
+          ? resolveTranscriptTurnForPersistence(relay, role, normalizedText)
+          : undefined;
+        if (transcriptTurnId) {
           enqueueRelayTranscriptPersistence(relay, {
-            turnId,
+            turnId: transcriptTurnId,
             role,
-            text: text.trim(),
+            text: normalizedText,
             cfg: params.cfg,
           });
         }
@@ -774,6 +842,8 @@ export function createTalkRealtimeRelaySession(
     transcript: [],
     transcriptWriteQueue: Promise.resolve(),
     closing: false,
+    transcriptTurn: undefined,
+    transcriptTurnSeq: 0,
   };
   relayRef.current = relay;
   relay.cleanupTimer.unref?.();
