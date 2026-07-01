@@ -1,0 +1,365 @@
+#!/usr/bin/env python3
+"""Keep local Talk realtime transcript persistence across package updates.
+
+This is a local operator patch for installations where the upstream package does
+not yet include realtime Talk transcript persistence. It patches the currently
+installed OpenClaw `dist/talk-*.js` bundle at gateway startup.
+
+The script is idempotent and fails closed. If the expected bundle shape changes,
+the gateway startup hook fails instead of silently running without persistence.
+"""
+from __future__ import annotations
+
+import os
+import re
+import shutil
+import subprocess
+from datetime import datetime, timezone
+from pathlib import Path
+
+
+HOME = Path.home()
+ROOT = Path(
+    os.environ.get(
+        "OPENCLAW_GLOBAL_ROOT",
+        str(HOME / ".npm-global" / "lib" / "node_modules" / "openclaw"),
+    )
+)
+DIST = ROOT / "dist"
+LOG = Path(
+    os.environ.get(
+        "OPENCLAW_TALK_PATCH_LOG",
+        str(HOME / ".openclaw" / "logs" / "talk-transcript-persistence-guard.log"),
+    )
+)
+MARKERS = (
+    "//#region src/gateway/talk-transcript-persistence.ts",
+    'const TALK_TRANSCRIPT_SOURCE = "realtime-talk";',
+    "async function persistFinalTalkTranscript(params)",
+    "function enqueueRelayTranscriptPersistence(session, params)",
+    "transcriptWriteQueue: Promise.resolve()",
+)
+
+
+def now() -> str:
+    return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
+
+
+def log(message: str) -> None:
+    LOG.parent.mkdir(parents=True, exist_ok=True)
+    line = f"[{now()}] openclaw-talk-transcript-guard: {message}"
+    with LOG.open("a", encoding="utf-8") as handle:
+        handle.write(line + "\n")
+    print(line)
+
+
+def fail(message: str) -> None:
+    log(f"FAIL: {message}")
+    raise SystemExit(1)
+
+
+def find_talk_bundle() -> Path:
+    candidates: list[Path] = []
+    for path in DIST.glob("talk-*.js"):
+        if path.name.startswith("talk-config-runtime-"):
+            continue
+        text = path.read_text(encoding="utf-8", errors="ignore")
+        if "//#region src/gateway/talk-realtime-relay.ts" in text and "createTalkRealtimeRelaySession" in text:
+            candidates.append(path)
+    if not candidates:
+        fail(f"no realtime Talk bundle found under {DIST}")
+    candidates.sort(key=lambda candidate: candidate.stat().st_mtime, reverse=True)
+    return candidates[0]
+
+
+def has_patch(text: str) -> bool:
+    return all(marker in text for marker in MARKERS)
+
+
+def replace_once(text: str, old: str, new: str, label: str) -> str:
+    count = text.count(old)
+    if count != 1:
+        fail(f"expected exactly one {label}, found {count}")
+    return text.replace(old, new, 1)
+
+
+def detect_imports(text: str) -> dict[str, str]:
+    patterns = {
+        "chat": r'import \{ r as chatHandlers \} from "(\.\/chat-[^"]+\.js)";',
+        "session_key": r'import \{ p as resolveAgentIdFromSessionKey \} from "(\.\/session-key-[^"]+\.js)";',
+        "paths": r'import \{ d as resolveStorePath \} from "(\.\/paths-[^"]+\.js)";',
+        "session_accessor": r'import \{ b as persistSessionTranscriptTurn, m as loadSessionEntry \} from "(\.\/session-accessor-[^"]+\.js)";',
+    }
+    found: dict[str, str] = {}
+    for key, pattern in patterns.items():
+        match = re.search(pattern, text)
+        if match:
+            found[key] = match.group(1)
+    if "chat" not in found:
+        fail("could not locate chatHandlers import anchor")
+    if "session_key" not in found:
+        matches = sorted(DIST.glob("session-key-*.js"), key=lambda path: path.stat().st_mtime, reverse=True)
+        if not matches:
+            fail("could not locate session-key dist module")
+        found["session_key"] = f"./{matches[0].name}"
+    if "paths" not in found:
+        matches = sorted(DIST.glob("paths-*.js"), key=lambda path: path.stat().st_mtime, reverse=True)
+        if not matches:
+            fail("could not locate paths dist module")
+        found["paths"] = f"./{matches[0].name}"
+    if "session_accessor" not in found:
+        shim = next(
+            (
+                path
+                for path in DIST.glob("session-accessor-*.js")
+                if "export {" in path.read_text(encoding="utf-8", errors="ignore")[:3000]
+            ),
+            None,
+        )
+        if not shim:
+            fail("could not locate session-accessor dist module")
+        found["session_accessor"] = f"./{shim.name}"
+    return found
+
+
+def patch_text(text: str) -> str:
+    imports = detect_imports(text)
+    chat_import = f'import {{ r as chatHandlers }} from "{imports["chat"]}";\n'
+    extra_imports = (
+        f'import {{ p as resolveAgentIdFromSessionKey }} from "{imports["session_key"]}";\n'
+        f'import {{ d as resolveStorePath }} from "{imports["paths"]}";\n'
+        f'import {{ b as persistSessionTranscriptTurn, m as loadSessionEntry }} from "{imports["session_accessor"]}";\n'
+    )
+    if "resolveAgentIdFromSessionKey" not in text:
+        text = replace_once(text, chat_import, chat_import + extra_imports, "chat import anchor")
+
+    persistence_block = '''//#endregion
+//#region src/gateway/talk-transcript-persistence.ts
+const TALK_TRANSCRIPT_SOURCE = "realtime-talk";
+const GATEWAY_INJECTED_PROVIDER = "openclaw";
+const GATEWAY_INJECTED_MODEL = "gateway-injected";
+const ZERO_TOKEN_USAGE = {
+\tinput: 0,
+\toutput: 0,
+\tcacheRead: 0,
+\tcacheWrite: 0,
+\ttotalTokens: 0,
+\tcost: {
+\t\tinput: 0,
+\t\toutput: 0,
+\t\tcacheRead: 0,
+\t\tcacheWrite: 0,
+\t\ttotal: 0
+\t}
+};
+function buildTalkIdempotencyKey(params) {
+\tconst textHash = createHash("sha256").update(params.text).digest("hex");
+\treturn `talk:${params.relaySessionId}:${params.turnId}:${params.role}:${textHash}`;
+}
+function buildTalkProvenance(params) {
+\treturn {
+\t\trelaySessionId: params.relaySessionId,
+\t\tturnId: params.turnId,
+\t\tprovider: params.provider,
+\t\tsource: TALK_TRANSCRIPT_SOURCE
+\t};
+}
+function buildTalkTranscriptMessage(params) {
+\tconst { idempotencyKey, provenance: openclawTalk } = params;
+\tif (params.role === "user") return {
+\t\trole: "user",
+\t\tcontent: params.text,
+\t\ttimestamp: params.now,
+\t\tidempotencyKey,
+\t\topenclawTalk
+\t};
+\treturn {
+\t\trole: "assistant",
+\t\tcontent: [{
+\t\t\ttype: "text",
+\t\t\ttext: params.text
+\t\t}],
+\t\tprovider: GATEWAY_INJECTED_PROVIDER,
+\t\tmodel: GATEWAY_INJECTED_MODEL,
+\t\tusage: ZERO_TOKEN_USAGE,
+\t\tstopReason: "stop",
+\t\ttimestamp: params.now,
+\t\tidempotencyKey,
+\t\topenclawTalk
+\t};
+}
+async function persistFinalTalkTranscript(params) {
+\tconst sessionKey = params.sessionKey?.trim();
+\tconst text = params.text.trim();
+\tif (!sessionKey || !text) return { status: "skipped" };
+\tconst agentId = resolveAgentIdFromSessionKey(sessionKey);
+\tconst storePath = resolveStorePath(params.config?.session?.store, agentId ? { agentId } : {});
+\tconst sessionId = loadSessionEntry({
+\t\tsessionKey,
+\t\tstorePath
+\t})?.sessionId;
+\tif (!sessionId) return { status: "skipped" };
+\tconst now = params.now ?? Date.now();
+\tconst idempotencyKey = buildTalkIdempotencyKey({
+\t\trelaySessionId: params.relaySessionId,
+\t\tturnId: params.turnId,
+\t\trole: params.role,
+\t\ttext
+\t});
+\tconst message = buildTalkTranscriptMessage({
+\t\trole: params.role,
+\t\ttext,
+\t\tnow,
+\t\tidempotencyKey,
+\t\tprovenance: buildTalkProvenance({
+\t\t\trelaySessionId: params.relaySessionId,
+\t\t\tturnId: params.turnId,
+\t\t\tprovider: params.provider
+\t\t})
+\t});
+\tconst appendResult = (await persistSessionTranscriptTurn({
+\t\tsessionKey,
+\t\tsessionId,
+\t\tstorePath,
+\t\t...agentId ? { agentId } : {},
+\t\t...params.config ? { config: params.config } : {}
+\t}, {
+\t\tupdateMode: "inline",
+\t\tmessages: [{
+\t\t\tmessage,
+\t\t\tidempotencyLookup: "scan",
+\t\t\tnow
+\t\t}]
+\t})).messages[0];
+\tif (!appendResult) return { status: "skipped" };
+\treturn {
+\t\tstatus: appendResult.appended ? "appended" : "duplicate",
+\t\tmessageId: appendResult.messageId
+\t};
+}
+//#endregion
+//#region src/gateway/talk-realtime-relay.ts
+'''
+    text = replace_once(
+        text,
+        "//#endregion\n//#region src/gateway/talk-realtime-relay.ts\n",
+        persistence_block,
+        "realtime relay region anchor",
+    )
+
+    helper_block = '''function resolveTranscriptTurnForPersistence(session, role, text) {
+\tconst current = session.transcriptTurn;
+\tif (role === "user") {
+\t\tif (!current || current.userFinalized) {
+\t\t\tsession.transcriptTurnSeq += 1;
+\t\t\tsession.transcriptTurn = {
+\t\t\t\tid: `t${session.transcriptTurnSeq}`,
+\t\t\t\tuserFinalized: Boolean(text.trim()),
+\t\t\t\tassistantFinalized: false
+\t\t\t};
+\t\t\treturn session.transcriptTurn.id;
+\t\t}
+\t\tcurrent.userFinalized = true;
+\t\treturn current.id;
+\t}
+\tif (!current || current.assistantFinalized) {
+\t\tsession.transcriptTurnSeq += 1;
+\t\tsession.transcriptTurn = {
+\t\t\tid: `t${session.transcriptTurnSeq}`,
+\t\t\tuserFinalized: false,
+\t\t\tassistantFinalized: true
+\t\t};
+\t\treturn session.transcriptTurn.id;
+\t}
+\tcurrent.assistantFinalized = true;
+\treturn current.id;
+}
+function enqueueRelayTranscriptPersistence(session, params) {
+\tsession.transcriptWriteQueue = session.transcriptWriteQueue.catch(() => {}).then(() => persistFinalTalkTranscript({
+\t\trelaySessionId: session.id,
+\t\tturnId: params.turnId,
+\t\trole: params.role,
+\t\ttext: params.text,
+\t\tsessionKey: session.sessionKey,
+\t\tprovider: session.providerId,
+\t\tconfig: params.cfg
+\t})).catch((error) => {
+\t\tsession.context.logGateway?.warn("Talk transcript persistence failed", {
+\t\t\trelaySessionId: session.id,
+\t\t\terror: formatForLog(error)
+\t\t});
+\t});
+}
+async function closeRelaySessionInBackground(session, reason) {
+\tcloseRelaySession(session, reason);
+\ttry {
+\t\tawait session.transcriptWriteQueue;
+\t} catch {}
+}
+'''
+    text = replace_once(
+        text,
+        "function submitRelayAgentControlProviderResults(session, result, turnId) {\n",
+        helper_block + "function submitRelayAgentControlProviderResults(session, result, turnId) {\n",
+        "submit helper anchor",
+    )
+    text = replace_once(
+        text,
+        'if (active) closeRelaySession(active, "completed");',
+        'if (active) closeRelaySessionInBackground(active, "completed");',
+        "cleanup close anchor",
+    )
+
+    transcript_replacement = '''if (final && relay) {
+\t\t\t\trecordRealtimeVoiceTranscript(relay.transcript, role, text);
+\t\t\t\tconst normalizedText = text.trim();
+\t\t\t\tconst transcriptTurnId = normalizedText ? resolveTranscriptTurnForPersistence(relay, role, normalizedText) : void 0;
+\t\t\t\tif (transcriptTurnId) enqueueRelayTranscriptPersistence(relay, {
+\t\t\t\t\tturnId: transcriptTurnId,
+\t\t\t\t\trole,
+\t\t\t\t\ttext: normalizedText,
+\t\t\t\t\tcfg: params.cfg
+\t\t\t\t});
+\t\t\t}'''
+    text = replace_once(
+        text,
+        'if (final && relay) recordRealtimeVoiceTranscript(relay.transcript, role, text);',
+        transcript_replacement,
+        "final transcript record anchor",
+    )
+    text = replace_once(
+        text,
+        "\t\tforcedConsults: createRealtimeVoiceForcedConsultCoordinator(),\n\t\ttranscript: []\n\t};",
+        "\t\tforcedConsults: createRealtimeVoiceForcedConsultCoordinator(),\n\t\ttranscript: [],\n\t\ttranscriptWriteQueue: Promise.resolve(),\n\t\tproviderId: params.provider.id,\n\t\ttranscriptTurn: void 0,\n\t\ttranscriptTurnSeq: 0\n\t};",
+        "relay session fields anchor",
+    )
+    return text
+
+
+def main() -> int:
+    bundle = find_talk_bundle()
+    text = bundle.read_text(encoding="utf-8")
+    log(f"checking bundle={bundle}")
+    if has_patch(text):
+        subprocess.run(["node", "--check", str(bundle)], check=True, stdout=subprocess.DEVNULL)
+        log("PASS: persistence markers already present")
+        return 0
+
+    backup = bundle.with_name(
+        f"{bundle.name}.bak-{datetime.now().strftime('%Y%m%d-%H%M%S')}-pre-auto-transcript-persistence"
+    )
+    shutil.copy2(bundle, backup)
+    patched = patch_text(text)
+    if not has_patch(patched):
+        fail("patched text does not contain all required markers")
+
+    tmp = bundle.with_suffix(bundle.suffix + ".tmp-transcript-persistence")
+    tmp.write_text(patched, encoding="utf-8")
+    subprocess.run(["node", "--check", str(tmp)], check=True, stdout=subprocess.DEVNULL)
+    os.replace(tmp, bundle)
+    log(f"PATCHED: wrote persistence patch to {bundle}; backup={backup}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
