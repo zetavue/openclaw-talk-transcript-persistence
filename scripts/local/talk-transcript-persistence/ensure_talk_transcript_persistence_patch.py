@@ -48,6 +48,11 @@ TELEGRAM_CONTEXT_MARKERS = (
     'const OPENCLAW_LOCAL_TELEGRAM_CONTEXT_DEDUPE_MARKER = "openclaw-local-telegram-context-dedupe-v1";',
     "function dedupeOpenClawLocalTelegramPromptMessages(messages)",
 )
+TELEGRAM_MIRROR_MARKERS = (
+    'const OPENCLAW_LOCAL_TELEGRAM_DELIVERY_MIRROR_DEDUPE_MARKER = "openclaw-local-telegram-delivery-mirror-dedupe-v1";',
+    "const latestAssistant = await readLatestAssistantTextByIdentity({",
+    "latestAssistant?.text?.trim() === text.trim()",
+)
 
 
 def now() -> str:
@@ -451,6 +456,25 @@ function dedupeOpenClawLocalTelegramPromptMessages(messages) {
     return text
 
 
+def patch_telegram_delivery_mirror_text(text: str) -> str:
+    if has_markers(text, TELEGRAM_MIRROR_MARKERS):
+        return text
+    text = replace_once(
+        text,
+        "async function mirrorTelegramAssistantReplyToTranscript(params) {\n",
+        'const OPENCLAW_LOCAL_TELEGRAM_DELIVERY_MIRROR_DEDUPE_MARKER = "openclaw-local-telegram-delivery-mirror-dedupe-v1";\n'
+        "async function mirrorTelegramAssistantReplyToTranscript(params) {\n",
+        "telegram delivery mirror function anchor",
+    )
+    text = replace_once(
+        text,
+        "\tif (!session) return;\n\tconst appended = await appendAssistantMirrorMessageByIdentity({\n",
+        "\tif (!session) return;\n\tconst latestAssistant = await readLatestAssistantTextByIdentity({\n\t\tagentId: params.route.agentId,\n\t\tsessionId: session.sessionId,\n\t\tsessionKey: params.sessionKey,\n\t\tstorePath: session.storePath\n\t});\n\tif (latestAssistant?.text?.trim() === text.trim()) {\n\t\tlogVerbose(\"telegram delivery mirror duplicate suppressed by local post-update patch\");\n\t\treturn;\n\t}\n\tconst appended = await appendAssistantMirrorMessageByIdentity({\n",
+        "telegram delivery mirror append anchor",
+    )
+    return text
+
+
 def patch_bundle(bundle: Path, markers: tuple[str, ...], patcher, label: str) -> bool:
     text = bundle.read_text(encoding="utf-8")
     log(f"checking {label} bundle={bundle}")
@@ -495,6 +519,7 @@ def main() -> int:
         ),
     )
     patch_bundle(telegram_context_bundle, TELEGRAM_CONTEXT_MARKERS, patch_telegram_context_text, "telegram-context-dedupe")
+    patch_bundle(telegram_context_bundle, TELEGRAM_MIRROR_MARKERS, patch_telegram_delivery_mirror_text, "telegram-delivery-mirror-dedupe")
     return 0
 
 
