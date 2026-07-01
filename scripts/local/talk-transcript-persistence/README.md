@@ -1,18 +1,27 @@
-# Talk Transcript Persistence Local Patch
+# Local Post-Update Patch Guard
 
-This directory contains the local operator patch that keeps WebUI/voice Talk
-transcripts persisted across npm package updates until the behavior is fully
-upstreamed.
+This directory contains local operator patches that keep critical site-specific
+behavior across npm package updates until the behavior is fully upstreamed.
 
 The patch is intentionally installed as a systemd `ExecStartPre` hook. Each
-gateway start checks the currently installed `dist/talk-*.js` bundle, verifies
-whether the persistence markers are present, and patches the bundle only when
-the upstream package has overwritten the local change.
+gateway start checks the currently installed OpenClaw `dist/*.js` bundles,
+verifies whether the local markers are present, and patches only when the
+upstream package has overwritten the local changes.
+
+## Current Patches
+
+- Talk/WebUI realtime transcript persistence for voice input sessions.
+- Telegram outbound text idempotency: suppresses duplicate pure-text sends with
+  the same account, chat, thread, silence flag, and normalized body within a
+  short time window.
+- Telegram prompt-context dedupe: removes duplicate selected context messages
+  when the same OpenClaw reply is present through both session transcript and
+  Telegram cache/mirror history.
 
 ## Files
 
 - `ensure_talk_transcript_persistence_patch.py`: idempotent patcher for the
-  installed OpenClaw Talk bundle.
+  installed OpenClaw Talk and Telegram bundles.
 - `90-talk-transcript-persistence.conf`: systemd user drop-in template for
   `openclaw-gateway.service`.
 
@@ -38,7 +47,9 @@ tail -n 20 ~/.openclaw/logs/talk-transcript-persistence-guard.log
 Expected log marker:
 
 ```text
-openclaw-talk-transcript-guard: PASS: persistence markers already present
+openclaw-talk-transcript-guard: PASS: talk-transcript-persistence markers already present
+openclaw-talk-transcript-guard: PASS: telegram-outbound-dedupe markers already present
+openclaw-talk-transcript-guard: PASS: telegram-context-dedupe markers already present
 ```
 
 ## Environment Overrides

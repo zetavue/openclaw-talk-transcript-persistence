@@ -39,6 +39,15 @@ MARKERS = (
     "function enqueueRelayTranscriptPersistence(session, params)",
     "transcriptWriteQueue: Promise.resolve()",
 )
+TELEGRAM_SEND_MARKERS = (
+    'const OPENCLAW_LOCAL_TELEGRAM_OUTBOUND_DEDUPE_MARKER = "openclaw-local-telegram-outbound-dedupe-v1";',
+    "function buildOpenClawLocalTelegramOutboundDedupeKey(params)",
+    "function runOpenClawLocalTelegramOutboundDedupe(key, send)",
+)
+TELEGRAM_CONTEXT_MARKERS = (
+    'const OPENCLAW_LOCAL_TELEGRAM_CONTEXT_DEDUPE_MARKER = "openclaw-local-telegram-context-dedupe-v1";',
+    "function dedupeOpenClawLocalTelegramPromptMessages(messages)",
+)
 
 
 def now() -> str:
@@ -74,6 +83,22 @@ def find_talk_bundle() -> Path:
 
 def has_patch(text: str) -> bool:
     return all(marker in text for marker in MARKERS)
+
+
+def has_markers(text: str, markers: tuple[str, ...]) -> bool:
+    return all(marker in text for marker in markers)
+
+
+def find_dist_bundle(label: str, required: tuple[str, ...]) -> Path:
+    candidates: list[Path] = []
+    for path in DIST.glob("*.js"):
+        text = path.read_text(encoding="utf-8", errors="ignore")
+        if all(marker in text for marker in required):
+            candidates.append(path)
+    if not candidates:
+        fail(f"no {label} bundle found under {DIST}")
+    candidates.sort(key=lambda candidate: candidate.stat().st_mtime, reverse=True)
+    return candidates[0]
 
 
 def replace_once(text: str, old: str, new: str, label: str) -> str:
@@ -336,28 +361,140 @@ async function closeRelaySessionInBackground(session, reason) {
     return text
 
 
-def main() -> int:
-    bundle = find_talk_bundle()
-    text = bundle.read_text(encoding="utf-8")
-    log(f"checking bundle={bundle}")
-    if has_patch(text):
-        subprocess.run(["node", "--check", str(bundle)], check=True, stdout=subprocess.DEVNULL)
-        log("PASS: persistence markers already present")
-        return 0
+def patch_telegram_send_text(text: str) -> str:
+    if has_markers(text, TELEGRAM_SEND_MARKERS):
+        return text
+    helper = '''const OPENCLAW_LOCAL_TELEGRAM_OUTBOUND_DEDUPE_MARKER = "openclaw-local-telegram-outbound-dedupe-v1";
+const OPENCLAW_LOCAL_TELEGRAM_OUTBOUND_DEDUPE_TTL_MS = 90 * 1000;
+const openclawLocalTelegramOutboundDedupe = /* @__PURE__ */ new Map();
+function normalizeOpenClawLocalTelegramOutboundText(text) {
+\treturn String(text ?? "").replace(/\\s+/gu, " ").trim();
+}
+function pruneOpenClawLocalTelegramOutboundDedupe(now) {
+\tfor (const [key, entry] of openclawLocalTelegramOutboundDedupe) if (now - entry.at > OPENCLAW_LOCAL_TELEGRAM_OUTBOUND_DEDUPE_TTL_MS) openclawLocalTelegramOutboundDedupe.delete(key);
+}
+function buildOpenClawLocalTelegramOutboundDedupeKey(params) {
+\tconst normalized = normalizeOpenClawLocalTelegramOutboundText(params.text);
+\tif (!normalized) return;
+\treturn [params.accountId ?? "", params.chatId ?? "", params.threadId ?? "", params.silent === true ? "silent" : "normal", normalized].join("\\u001f");
+}
+function runOpenClawLocalTelegramOutboundDedupe(key, send) {
+\tconst now = Date.now();
+\tpruneOpenClawLocalTelegramOutboundDedupe(now);
+\tconst existing = openclawLocalTelegramOutboundDedupe.get(key);
+\tif (existing && now - existing.at <= OPENCLAW_LOCAL_TELEGRAM_OUTBOUND_DEDUPE_TTL_MS) {
+\t\tlogVerbose("telegram outbound duplicate suppressed by local post-update patch");
+\t\treturn existing.promise;
+\t}
+\tconst promise = Promise.resolve().then(send);
+\topenclawLocalTelegramOutboundDedupe.set(key, { at: now, promise });
+\tpromise.catch(() => {
+\t\tif (openclawLocalTelegramOutboundDedupe.get(key)?.promise === promise) openclawLocalTelegramOutboundDedupe.delete(key);
+\t});
+\treturn promise;
+}
+'''
+    text = replace_once(
+        text,
+        "async function sendMessageTelegram(to, text, opts) {\n",
+        helper + "async function sendMessageTelegram(to, text, opts) {\n",
+        "telegram send function anchor",
+    )
+    text = replace_once(
+        text,
+        '\tif (!text || !text.trim()) throw new Error("Message must be non-empty for Telegram sends");\n\tconst textResult = await sendChunkedText(text, "text send");\n',
+        '\tif (!text || !text.trim()) throw new Error("Message must be non-empty for Telegram sends");\n\tconst outboundDedupeKey = buildOpenClawLocalTelegramOutboundDedupeKey({\n\t\taccountId: account.accountId,\n\t\tchatId,\n\t\tthreadId: threadParams.message_thread_id,\n\t\ttext,\n\t\tsilent: opts.silent\n\t});\n\tconst textResult = await (outboundDedupeKey ? runOpenClawLocalTelegramOutboundDedupe(outboundDedupeKey, () => sendChunkedText(text, "text send")) : sendChunkedText(text, "text send"));\n',
+        "telegram text send anchor",
+    )
+    return text
 
+
+def patch_telegram_context_text(text: str) -> str:
+    if has_markers(text, TELEGRAM_CONTEXT_MARKERS):
+        return text
+    helper = '''const OPENCLAW_LOCAL_TELEGRAM_CONTEXT_DEDUPE_MARKER = "openclaw-local-telegram-context-dedupe-v1";
+function normalizeOpenClawLocalTelegramPromptSender(sender) {
+\tconst value = String(sender ?? "").replace(/\\s*\\([^)]*\\)\\s*$/u, "").trim().toLowerCase();
+\tif (value === "openclaw") return "assistant";
+\tif (value === "user") return "user";
+\treturn value;
+}
+function normalizeOpenClawLocalTelegramPromptBody(body) {
+\treturn String(body ?? "").replace(/\\s+/gu, " ").trim().toLowerCase();
+}
+function dedupeOpenClawLocalTelegramPromptMessages(messages) {
+\tconst seen = /* @__PURE__ */ new Set();
+\tconst kept = [];
+\tfor (const message of messages) {
+\t\tconst body = normalizeOpenClawLocalTelegramPromptBody(message?.body);
+\t\tconst sender = normalizeOpenClawLocalTelegramPromptSender(message?.sender);
+\t\tconst key = body ? `${sender}\\u001f${body}` : "";
+\t\tif (key && seen.has(key)) continue;
+\t\tif (key) seen.add(key);
+\t\tkept.push(message);
+\t}
+\treturn kept;
+}
+'''
+    text = replace_once(
+        text,
+        "const registerTelegramNativeCommands = ({ bot, cfg, runtime, accountId, telegramCfg, allowFrom, groupAllowFrom, replyToMode, textLimit, mediaMaxBytes, useAccessGroups, nativeEnabled, nativeSkillsEnabled, nativeDisabledExplicit, resolveGroupPolicy, resolveTelegramGroupConfig, shouldSkipUpdate, telegramDeps = defaultTelegramNativeCommandDeps, opts }) => {\n",
+        helper + "const registerTelegramNativeCommands = ({ bot, cfg, runtime, accountId, telegramCfg, allowFrom, groupAllowFrom, replyToMode, textLimit, mediaMaxBytes, useAccessGroups, nativeEnabled, nativeSkillsEnabled, nativeDisabledExplicit, resolveGroupPolicy, resolveTelegramGroupConfig, shouldSkipUpdate, telegramDeps = defaultTelegramNativeCommandDeps, opts }) => {\n",
+        "telegram context helper anchor",
+    )
+    text = replace_once(
+        text,
+        "\t\tconst promptMessages = [...sessionOnlyPromptMessages, ...cachePromptMessages].toSorted((left, right) => (left.timestamp_ms ?? 0) - (right.timestamp_ms ?? 0));\n",
+        "\t\tconst promptMessages = dedupeOpenClawLocalTelegramPromptMessages([...sessionOnlyPromptMessages, ...cachePromptMessages].toSorted((left, right) => (left.timestamp_ms ?? 0) - (right.timestamp_ms ?? 0)));\n",
+        "telegram prompt messages anchor",
+    )
+    return text
+
+
+def patch_bundle(bundle: Path, markers: tuple[str, ...], patcher, label: str) -> bool:
+    text = bundle.read_text(encoding="utf-8")
+    log(f"checking {label} bundle={bundle}")
+    if has_markers(text, markers):
+        subprocess.run(["node", "--check", str(bundle)], check=True, stdout=subprocess.DEVNULL)
+        log(f"PASS: {label} markers already present")
+        return False
     backup = bundle.with_name(
-        f"{bundle.name}.bak-{datetime.now().strftime('%Y%m%d-%H%M%S')}-pre-auto-transcript-persistence"
+        f"{bundle.name}.bak-{datetime.now().strftime('%Y%m%d-%H%M%S')}-pre-auto-{label}"
     )
     shutil.copy2(bundle, backup)
-    patched = patch_text(text)
-    if not has_patch(patched):
-        fail("patched text does not contain all required markers")
-
-    tmp = bundle.with_suffix(bundle.suffix + ".tmp-transcript-persistence")
+    patched = patcher(text)
+    if not has_markers(patched, markers):
+        fail(f"patched {label} text does not contain all required markers")
+    tmp = bundle.with_name(f"{bundle.stem}.tmp-{label}{bundle.suffix}")
     tmp.write_text(patched, encoding="utf-8")
     subprocess.run(["node", "--check", str(tmp)], check=True, stdout=subprocess.DEVNULL)
     os.replace(tmp, bundle)
-    log(f"PATCHED: wrote persistence patch to {bundle}; backup={backup}")
+    log(f"PATCHED: wrote {label} patch to {bundle}; backup={backup}")
+    return True
+
+
+def main() -> int:
+    bundle = find_talk_bundle()
+    patch_bundle(bundle, MARKERS, patch_text, "talk-transcript-persistence")
+    telegram_send_bundle = find_dist_bundle(
+        "telegram send",
+        (
+            "async function sendMessageTelegram(to, text, opts)",
+            'const sendChunkedText = async (rawText, context) =>',
+            'recordChannelActivity({\n\t\tchannel: "telegram",',
+        ),
+    )
+    patch_bundle(telegram_send_bundle, TELEGRAM_SEND_MARKERS, patch_telegram_send_text, "telegram-outbound-dedupe")
+    telegram_context_bundle = find_dist_bundle(
+        "telegram context",
+        (
+            "buildTelegramSessionTranscriptPromptMessages",
+            "buildTelegramConversationContext",
+            "const cacheTextKeys = new Set(cachePromptMessages.map",
+            "Conversation context",
+        ),
+    )
+    patch_bundle(telegram_context_bundle, TELEGRAM_CONTEXT_MARKERS, patch_telegram_context_text, "telegram-context-dedupe")
     return 0
 
 
