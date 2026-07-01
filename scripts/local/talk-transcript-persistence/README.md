@@ -17,6 +17,8 @@ upstream package has overwritten the local changes.
 - Telegram prompt-context dedupe: removes duplicate selected context messages
   when the same OpenClaw reply is present through both session transcript and
   Telegram cache/mirror history.
+- Telegram delivery-mirror dedupe: suppresses transcript mirror rows when the
+  latest assistant transcript text already matches the delivered Telegram final.
 
 ## Files
 
@@ -50,6 +52,7 @@ Expected log marker:
 openclaw-talk-transcript-guard: PASS: talk-transcript-persistence markers already present
 openclaw-talk-transcript-guard: PASS: telegram-outbound-dedupe markers already present
 openclaw-talk-transcript-guard: PASS: telegram-context-dedupe markers already present
+openclaw-talk-transcript-guard: PASS: telegram-delivery-mirror-dedupe markers already present
 ```
 
 ## Environment Overrides
