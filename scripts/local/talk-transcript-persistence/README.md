@@ -24,6 +24,8 @@ upstream package has overwritten the local changes.
   delivery path that does not always go through the generic send tool.
 - `voice-command-guard`: optional local patch for Telegram voice intent safety. Missing
   bundle is WARN-only and must never prevent gateway startup.
+- Mail action claim guard: fail-closed marker check for the runtime guard that
+  blocks unverified `Action-ID` success claims before they reach Telegram.
 
 ## Files
 
@@ -59,6 +61,7 @@ openclaw-talk-transcript-guard: PASS: telegram-outbound-dedupe markers already p
 openclaw-talk-transcript-guard: PASS: telegram-context-dedupe markers already present
 openclaw-talk-transcript-guard: PASS: telegram-delivery-mirror-dedupe markers already present
 openclaw-talk-transcript-guard: PASS: telegram-visible-reply-dedupe markers already present
+openclaw-talk-transcript-guard: PASS: mail-action-claim-guard markers already present
 ```
 
 ## Environment Overrides

@@ -22,6 +22,7 @@ import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { ReplyPayload, ReplyThreadingPolicy } from "../types.js";
 import { formatBunFetchSocketError, isBunFetchSocketError } from "./agent-runner-utils.js";
 import { createBlockReplyContentKey, type BlockReplyPipeline } from "./block-reply-pipeline.js";
+import { guardUnverifiedMailActionClaim } from "./mail-action-claim-guard.js";
 import {
   resolveOriginAccountId,
   resolveOriginMessageProvider,
@@ -166,6 +167,7 @@ function copyPayloadWithSanitizedText(
 export async function buildReplyPayloads(params: {
   config?: OpenClawConfig;
   payloads: ReplyPayload[];
+  agentId?: string;
   isHeartbeat: boolean;
   didLogHeartbeatStrip: boolean;
   silentExpected?: boolean;
@@ -204,6 +206,9 @@ export async function buildReplyPayloads(params: {
       if (payload.isError && text && isBunFetchSocketError(text)) {
         text = formatBunFetchSocketError(text);
       }
+      text = await guardUnverifiedMailActionClaim(text, {
+        agentId: params.agentId,
+      });
 
       if (!text || !text.includes("HEARTBEAT_OK")) {
         sanitizedPayloads.push(copyPayloadWithSanitizedText(payload, text));

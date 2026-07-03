@@ -2134,6 +2134,7 @@ export async function runReplyAgent(params: {
         fallbackNoticePayloads.length > 0
           ? [...fallbackNoticePayloads, ...payloadArray]
           : payloadArray,
+      agentId: followupRun.run.agentId,
       isHeartbeat,
       didLogHeartbeatStrip,
       silentExpected: followupRun.run.silentExpected,

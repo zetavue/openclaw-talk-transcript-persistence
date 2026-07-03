@@ -67,6 +67,11 @@ PROVIDER_MEDIA_REF_HINT_MARKERS = (
     "function normalizePromptMediaLocator(value)",
     'mediaRef.startsWith("telegram:file/")',
 )
+MAIL_ACTION_CLAIM_GUARD_MARKERS = (
+    "openclaw-local-mail-action-claim-guard-v1",
+    "Mail-Aktion nicht bestaetigt.",
+    "OPENCLAW_MAIL_ACTION_CLAIM_GUARD",
+)
 
 
 def now() -> str:
@@ -646,6 +651,16 @@ def main() -> int:
             patch_provider_media_ref_hint_text,
             "provider-media-ref-hint",
         )
+    mail_action_guard_bundle = find_dist_bundle(
+        "mail-action-claim-guard",
+        MAIL_ACTION_CLAIM_GUARD_MARKERS,
+    )
+    patch_bundle(
+        mail_action_guard_bundle,
+        MAIL_ACTION_CLAIM_GUARD_MARKERS,
+        lambda text: text,
+        "mail-action-claim-guard",
+    )
     return 0
 
 
