@@ -113,6 +113,7 @@ const replyResolverTimingLog = createSubsystemLogger("auto-reply/reply-resolver-
 const commandsCoreRuntimeLoader = createLazyImportLoader(
   () => import("./commands-core.runtime.js"),
 );
+export const VOICE_COMMAND_GUARD_MARKER = "openclaw-local-voice-command-guard-v1";
 const VOICE_COMMAND_GUARD_PREFIX = "VOICE_COMMAND_GUARD:";
 
 function loadSessionResetModelRuntime() {

@@ -26,6 +26,12 @@ ROOT = Path(
     )
 )
 DIST = ROOT / "dist"
+SOURCE_REPO = Path(
+    os.environ.get(
+        "OPENCLAW_LOCAL_SOURCE_REPO",
+        str(HOME / "src" / "openclaw"),
+    )
+)
 LOG = Path(
     os.environ.get(
         "OPENCLAW_TALK_PATCH_LOG",
@@ -40,8 +46,8 @@ MARKERS = (
     "transcriptWriteQueue: Promise.resolve()",
 )
 VOICE_COMMAND_GUARD_MARKERS = (
-    "VOICE_COMMAND_GUARD",
-    "openclaw-local-voice-command-guard-v1",
+    'const VOICE_COMMAND_GUARD_PREFIX = "VOICE_COMMAND_GUARD:";',
+    "startsWith(VOICE_COMMAND_GUARD_PREFIX)",
 )
 TELEGRAM_SEND_MARKERS = (
     'const OPENCLAW_LOCAL_TELEGRAM_OUTBOUND_DEDUPE_MARKER = "openclaw-local-telegram-outbound-dedupe-v1";',
@@ -77,10 +83,11 @@ STRUCTURED_MAIL_CREATE_DRAFT_TOOL_MARKERS = (
     "openclaw-local-structured-mail-create-draft-v1",
     "mail_create_draft",
 )
-RESTAURANT_MAIL_DRAFT_EXEC_BLOCK_MARKERS = (
-    "openclaw-local-restaurant-mail-draft-exec-block-v1",
+MAIL_DRAFT_EXEC_BLOCK_MARKERS = (
+    "openclaw-local-mail-draft-exec-block-v1",
     "Direct create_draft.py via exec/bash is blocked",
 )
+source_dist_rebuilt = False
 
 
 def now() -> str:
@@ -123,28 +130,85 @@ def has_markers(text: str, markers: tuple[str, ...]) -> bool:
 
 
 def find_dist_bundle(label: str, required: tuple[str, ...]) -> Path:
+    return find_dist_bundle_under(DIST, label, required)
+
+
+def find_dist_bundle_under(root: Path, label: str, required: tuple[str, ...]) -> Path:
     candidates: list[Path] = []
-    for path in DIST.glob("*.js"):
+    for path in root.glob("*.js"):
         text = path.read_text(encoding="utf-8", errors="ignore")
         if all(marker in text for marker in required):
             candidates.append(path)
     if not candidates:
-        fail(f"no {label} bundle found under {DIST}")
+        fail(f"no {label} bundle found under {root}")
     candidates.sort(key=lambda candidate: candidate.stat().st_mtime, reverse=True)
     return candidates[0]
 
 
 def find_optional_dist_bundle(label: str, required: tuple[str, ...]) -> Path | None:
+    return find_optional_dist_bundle_under(DIST, label, required)
+
+
+def find_optional_dist_bundle_under(root: Path, label: str, required: tuple[str, ...]) -> Path | None:
     candidates: list[Path] = []
-    for path in DIST.glob("*.js"):
+    for path in root.glob("*.js"):
         text = path.read_text(encoding="utf-8", errors="ignore")
         if all(marker in text for marker in required):
             candidates.append(path)
     if not candidates:
-        log(f"WARN: no {label} bundle found under {DIST}; skipping optional patch")
+        log(f"WARN: no {label} bundle found under {root}; skipping optional patch")
         return None
     candidates.sort(key=lambda candidate: candidate.stat().st_mtime, reverse=True)
     return candidates[0]
+
+
+def sync_source_dist(label: str, required: tuple[str, ...]) -> bool:
+    source_dist = SOURCE_REPO / "dist"
+    if not source_dist.exists():
+        return False
+    if find_optional_dist_bundle_under(source_dist, label, required) is None:
+        return False
+    log(f"RESTORE: {label} markers missing; syncing local source dist from {source_dist}")
+    subprocess.run(
+        ["rsync", "-a", "--delete", f"{source_dist}/", f"{DIST}/"],
+        check=True,
+    )
+    return True
+
+
+def rebuild_dist_from_source(label: str) -> None:
+    global source_dist_rebuilt
+    if source_dist_rebuilt:
+        fail(f"{label} markers still missing after source dist rebuild")
+    if not SOURCE_REPO.exists():
+        fail(f"{label} markers missing and source repo not found: {SOURCE_REPO}")
+    if not (SOURCE_REPO / "scripts" / "build-all.mjs").exists():
+        fail(f"{label} markers missing and source repo is not an OpenClaw checkout: {SOURCE_REPO}")
+    log(f"REBUILD: {label} markers missing; rebuilding local source dist from {SOURCE_REPO}")
+    subprocess.run(
+        ["node", "scripts/build-all.mjs"],
+        cwd=SOURCE_REPO,
+        check=True,
+    )
+    source_dist = SOURCE_REPO / "dist"
+    if not source_dist.exists():
+        fail(f"{label} source rebuild completed but dist is missing: {source_dist}")
+    subprocess.run(
+        ["rsync", "-a", "--delete", f"{source_dist}/", f"{DIST}/"],
+        check=True,
+    )
+    source_dist_rebuilt = True
+    log(f"REBUILD: copied local source dist to {DIST}")
+
+
+def find_source_backed_dist_bundle(label: str, required: tuple[str, ...]) -> Path:
+    bundle = find_optional_dist_bundle(label, required)
+    if bundle is not None:
+        return bundle
+    if sync_source_dist(label, required):
+        return find_dist_bundle(label, required)
+    rebuild_dist_from_source(label)
+    return find_dist_bundle(label, required)
 
 
 def replace_once(text: str, old: str, new: str, label: str) -> str:
@@ -641,9 +705,15 @@ def main() -> int:
     patch_bundle(telegram_context_bundle, TELEGRAM_CONTEXT_MARKERS, patch_telegram_context_text, "telegram-context-dedupe")
     patch_bundle(telegram_context_bundle, TELEGRAM_MIRROR_MARKERS, patch_telegram_delivery_mirror_text, "telegram-delivery-mirror-dedupe")
     patch_bundle(telegram_context_bundle, TELEGRAM_VISIBLE_REPLY_MARKERS, patch_telegram_visible_reply_text, "telegram-visible-reply-dedupe")
-    find_optional_dist_bundle(
+    voice_command_guard_bundle = find_source_backed_dist_bundle(
         "voice-command-guard",
         VOICE_COMMAND_GUARD_MARKERS,
+    )
+    patch_bundle(
+        voice_command_guard_bundle,
+        VOICE_COMMAND_GUARD_MARKERS,
+        lambda text: text,
+        "voice-command-guard",
     )
     get_reply_bundle = find_optional_dist_bundle(
         "get-reply inbound metadata",
@@ -660,7 +730,7 @@ def main() -> int:
             patch_provider_media_ref_hint_text,
             "provider-media-ref-hint",
         )
-    mail_action_guard_bundle = find_dist_bundle(
+    mail_action_guard_bundle = find_source_backed_dist_bundle(
         "mail-action-claim-guard",
         MAIL_ACTION_CLAIM_GUARD_MARKERS,
     )
@@ -670,7 +740,7 @@ def main() -> int:
         lambda text: text,
         "mail-action-claim-guard",
     )
-    structured_mail_create_draft_tool_bundle = find_dist_bundle(
+    structured_mail_create_draft_tool_bundle = find_source_backed_dist_bundle(
         "structured-mail-create-draft-tool",
         STRUCTURED_MAIL_CREATE_DRAFT_TOOL_MARKERS,
     )
@@ -680,15 +750,15 @@ def main() -> int:
         lambda text: text,
         "structured-mail-create-draft-tool",
     )
-    restaurant_mail_draft_exec_block_bundle = find_dist_bundle(
-        "restaurant-mail-draft-exec-block",
-        RESTAURANT_MAIL_DRAFT_EXEC_BLOCK_MARKERS,
+    mail_draft_exec_block_bundle = find_source_backed_dist_bundle(
+        "mail-draft-exec-block",
+        MAIL_DRAFT_EXEC_BLOCK_MARKERS,
     )
     patch_bundle(
-        restaurant_mail_draft_exec_block_bundle,
-        RESTAURANT_MAIL_DRAFT_EXEC_BLOCK_MARKERS,
+        mail_draft_exec_block_bundle,
+        MAIL_DRAFT_EXEC_BLOCK_MARKERS,
         lambda text: text,
-        "restaurant-mail-draft-exec-block",
+        "mail-draft-exec-block",
     )
     return 0
 

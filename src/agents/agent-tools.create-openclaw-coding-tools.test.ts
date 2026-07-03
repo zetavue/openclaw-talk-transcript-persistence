@@ -1290,13 +1290,13 @@ describe("createOpenClawCodingTools", () => {
     expect(toolNameList(tools)).toContain("mail_create_draft");
   });
 
-  it("does not expose structured mail draft creation to non-restaurant agents by default", () => {
+  it("keeps structured mail draft creation available for non-restaurant agents by default", () => {
     const tools = createOpenClawCodingTools({
       agentId: "main",
       config: { tools: { profile: "coding" } },
     });
 
-    expect(toolNameList(tools)).not.toContain("mail_create_draft");
+    expect(toolNameList(tools)).toContain("mail_create_draft");
   });
 
   it("can keep message available when a cron route needs it under a provider coding profile", () => {

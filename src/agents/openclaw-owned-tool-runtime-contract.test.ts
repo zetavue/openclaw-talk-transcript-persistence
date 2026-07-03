@@ -171,13 +171,13 @@ describe("OpenClaw-owned tool runtime contract - embedded agent adapter", () => 
     expect(afterContext.toolCallId).toBe(toolCallId);
   });
 
-  it("blocks restaurant mail draft creation through exec so drafts must use the structured Mail Layer tool", async () => {
+  it("blocks mail draft creation through exec so drafts must use the structured Mail Layer tool", async () => {
     installOpenClawOwnedToolHooks();
     const execute = vi.fn(async () => textToolResult("ran"));
     const tool = wrapToolWithBeforeToolCallHook(createContractTool("exec", execute), {
-      agentId: "restaurant",
-      sessionId: "session-restaurant",
-      sessionKey: "agent:restaurant:session-restaurant",
+      agentId: "agent-1",
+      sessionId: "session-agent-1",
+      sessionKey: "agent:agent-1:session-agent-1",
       runId: "run-mail-draft",
     });
     const definition = toToolDefinitions([tool])[0];

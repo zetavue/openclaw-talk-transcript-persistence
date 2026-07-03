@@ -233,8 +233,7 @@ const pendingTerminalPresentationByToolCall = new Map<
   }
 >();
 
-const RESTAURANT_MAIL_DRAFT_EXEC_BLOCK_MARKER =
-  "openclaw-local-restaurant-mail-draft-exec-block-v1";
+const MAIL_DRAFT_EXEC_BLOCK_MARKER = "openclaw-local-mail-draft-exec-block-v1";
 
 function readCommandParam(params: unknown): string | undefined {
   if (!isPlainObject(params)) {
@@ -244,14 +243,7 @@ function readCommandParam(params: unknown): string | undefined {
   return typeof command === "string" ? command : undefined;
 }
 
-function shouldBlockRestaurantMailDraftShell(
-  toolName: string,
-  params: unknown,
-  ctx?: HookContext,
-): boolean {
-  if (ctx?.agentId !== "restaurant") {
-    return false;
-  }
+function shouldBlockMailDraftShell(toolName: string, params: unknown): boolean {
   const normalizedToolName = normalizeToolName(toolName);
   if (normalizedToolName !== "exec" && normalizedToolName !== "bash") {
     return false;
@@ -1149,12 +1141,12 @@ export async function runBeforeToolCallHook(args: {
     const policyRegistry = getGlobalHookRunnerRegistry() ?? undefined;
     const shouldRunTrustedPolicies = hasTrustedToolPolicies(policyRegistry);
     const normalizedParams = isPlainObject(params) ? params : {};
-    if (shouldBlockRestaurantMailDraftShell(toolName, normalizedParams, args.ctx)) {
+    if (shouldBlockMailDraftShell(toolName, normalizedParams)) {
       return {
         blocked: true,
         kind: "veto",
         deniedReason: "plugin-before-tool-call",
-        reason: `${RESTAURANT_MAIL_DRAFT_EXEC_BLOCK_MARKER}: restaurant mail drafts must be created with the structured mail_create_draft tool. Direct create_draft.py via exec/bash is blocked so the model cannot claim a draft exists without a Mail Layer receipt.`,
+        reason: `${MAIL_DRAFT_EXEC_BLOCK_MARKER}: mail drafts must be created with the structured mail_create_draft tool. Direct create_draft.py via exec/bash is blocked so the model cannot claim a draft exists without a Mail Layer receipt.`,
         params: normalizedParams,
       };
     }

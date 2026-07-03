@@ -5,8 +5,9 @@ behavior across npm package updates until the behavior is fully upstreamed.
 
 The patch is intentionally installed as a systemd `ExecStartPre` hook. Each
 gateway start checks the currently installed OpenClaw `dist/*.js` bundles,
-verifies whether the local markers are present, and patches only when the
-upstream package has overwritten the local changes.
+verifies whether the local markers are present, patches text-level bundles when
+the upstream package has overwritten the local changes, and rebuilds/syncs the
+Git-managed local OpenClaw source tree when source-level local fixes are missing.
 
 ## Current Patches
 
@@ -22,14 +23,15 @@ upstream package has overwritten the local changes.
 - Telegram visible-reply dedupe: suppresses repeated visible Telegram replies
   within the same inbound Telegram turn, covering the bot streaming/final
   delivery path that does not always go through the generic send tool.
-- `voice-command-guard`: optional local patch for Telegram voice intent safety. Missing
-  bundle is WARN-only and must never prevent gateway startup.
-- Mail action claim guard: fail-closed marker check for the runtime guard that
-  blocks unverified `Action-ID` success claims before they reach Telegram,
-  including the live/block streaming path.
-- Structured restaurant mail draft creation: fail-closed marker checks that keep
-  the `mail_create_draft` Mail Layer tool and the restaurant-only `exec/bash`
-  block for direct `create_draft.py` calls after package updates.
+- `voice-command-guard`: source-backed local fix for Telegram voice intent safety.
+  If an OpenClaw update overwrites it, the guard rebuilds the local source tree
+  and syncs `dist/` back into the global installation.
+- Mail action claim guard: source-backed runtime guard that blocks unverified
+  `Action-ID` success claims before they reach Telegram, including the live/block
+  streaming path.
+- Structured mail draft creation for all agents: source-backed checks that keep
+  the `mail_create_draft` Mail Layer tool and the global `exec/bash` block for
+  direct `create_draft.py` calls after package updates.
 
 ## Files
 
@@ -65,12 +67,15 @@ openclaw-talk-transcript-guard: PASS: telegram-outbound-dedupe markers already p
 openclaw-talk-transcript-guard: PASS: telegram-context-dedupe markers already present
 openclaw-talk-transcript-guard: PASS: telegram-delivery-mirror-dedupe markers already present
 openclaw-talk-transcript-guard: PASS: telegram-visible-reply-dedupe markers already present
+openclaw-talk-transcript-guard: PASS: voice-command-guard markers already present
 openclaw-talk-transcript-guard: PASS: mail-action-claim-guard markers already present
 openclaw-talk-transcript-guard: PASS: structured-mail-create-draft-tool markers already present
-openclaw-talk-transcript-guard: PASS: restaurant-mail-draft-exec-block markers already present
+openclaw-talk-transcript-guard: PASS: mail-draft-exec-block markers already present
 ```
 
 ## Environment Overrides
 
 - `OPENCLAW_GLOBAL_ROOT`: path to the installed OpenClaw package root.
+- `OPENCLAW_LOCAL_SOURCE_REPO`: path to the Git-managed local OpenClaw source
+  checkout used to rebuild and restore source-backed local fixes.
 - `OPENCLAW_TALK_PATCH_LOG`: path to the patch guard log file.

@@ -631,14 +631,14 @@ export function createOpenClawCodingTools(options?: {
     forceMessageTool: options?.forceMessageTool,
     sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,
   });
-  const forceRestaurantMailDraftTool = agentId === "restaurant";
+  const forceStructuredMailDraftTool = true;
   const runtimeProfileAlsoAllow = [
     ...(options?.forceMessageTool || options?.sourceReplyDeliveryMode === "message_tool_only"
       ? ["message"]
       : []),
     ...(runtimeToolAllowlistIncludesMessage ? ["message"] : []),
     ...(forceHeartbeatTool ? [HEARTBEAT_RESPONSE_TOOL_NAME] : []),
-    ...(forceRestaurantMailDraftTool ? [MAIL_CREATE_DRAFT_TOOL_NAME] : []),
+    ...(forceStructuredMailDraftTool ? [MAIL_CREATE_DRAFT_TOOL_NAME] : []),
     ...toolSearchControlAllowlist,
   ];
   const profilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(profilePolicy, [
@@ -984,7 +984,7 @@ export function createOpenClawCodingTools(options?: {
       })
     : [];
   const mailDraftTools =
-    includeOpenClawTools && forceRestaurantMailDraftTool ? [createMailCreateDraftTool()] : [];
+    includeOpenClawTools && forceStructuredMailDraftTool ? [createMailCreateDraftTool()] : [];
   const tools: AnyAgentTool[] = [
     ...base,
     ...(includeBaseCodingTools && sandboxRoot
