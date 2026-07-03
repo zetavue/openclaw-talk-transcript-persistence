@@ -27,6 +27,9 @@ upstream package has overwritten the local changes.
 - Mail action claim guard: fail-closed marker check for the runtime guard that
   blocks unverified `Action-ID` success claims before they reach Telegram,
   including the live/block streaming path.
+- Structured restaurant mail draft creation: fail-closed marker checks that keep
+  the `mail_create_draft` Mail Layer tool and the restaurant-only `exec/bash`
+  block for direct `create_draft.py` calls after package updates.
 
 ## Files
 
@@ -63,6 +66,8 @@ openclaw-talk-transcript-guard: PASS: telegram-context-dedupe markers already pr
 openclaw-talk-transcript-guard: PASS: telegram-delivery-mirror-dedupe markers already present
 openclaw-talk-transcript-guard: PASS: telegram-visible-reply-dedupe markers already present
 openclaw-talk-transcript-guard: PASS: mail-action-claim-guard markers already present
+openclaw-talk-transcript-guard: PASS: structured-mail-create-draft-tool markers already present
+openclaw-talk-transcript-guard: PASS: restaurant-mail-draft-exec-block markers already present
 ```
 
 ## Environment Overrides

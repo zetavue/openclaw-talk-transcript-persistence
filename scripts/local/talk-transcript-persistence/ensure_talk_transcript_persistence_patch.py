@@ -73,6 +73,14 @@ MAIL_ACTION_CLAIM_GUARD_MARKERS = (
     "Mail-Aktion nicht bestaetigt.",
     "OPENCLAW_MAIL_ACTION_CLAIM_GUARD",
 )
+STRUCTURED_MAIL_CREATE_DRAFT_TOOL_MARKERS = (
+    "openclaw-local-structured-mail-create-draft-v1",
+    "mail_create_draft",
+)
+RESTAURANT_MAIL_DRAFT_EXEC_BLOCK_MARKERS = (
+    "openclaw-local-restaurant-mail-draft-exec-block-v1",
+    "Direct create_draft.py via exec/bash is blocked",
+)
 
 
 def now() -> str:
@@ -661,6 +669,26 @@ def main() -> int:
         MAIL_ACTION_CLAIM_GUARD_MARKERS,
         lambda text: text,
         "mail-action-claim-guard",
+    )
+    structured_mail_create_draft_tool_bundle = find_dist_bundle(
+        "structured-mail-create-draft-tool",
+        STRUCTURED_MAIL_CREATE_DRAFT_TOOL_MARKERS,
+    )
+    patch_bundle(
+        structured_mail_create_draft_tool_bundle,
+        STRUCTURED_MAIL_CREATE_DRAFT_TOOL_MARKERS,
+        lambda text: text,
+        "structured-mail-create-draft-tool",
+    )
+    restaurant_mail_draft_exec_block_bundle = find_dist_bundle(
+        "restaurant-mail-draft-exec-block",
+        RESTAURANT_MAIL_DRAFT_EXEC_BLOCK_MARKERS,
+    )
+    patch_bundle(
+        restaurant_mail_draft_exec_block_bundle,
+        RESTAURANT_MAIL_DRAFT_EXEC_BLOCK_MARKERS,
+        lambda text: text,
+        "restaurant-mail-draft-exec-block",
     )
     return 0
 

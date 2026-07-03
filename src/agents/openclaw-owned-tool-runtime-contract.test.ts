@@ -171,6 +171,32 @@ describe("OpenClaw-owned tool runtime contract - embedded agent adapter", () => 
     expect(afterContext.toolCallId).toBe(toolCallId);
   });
 
+  it("blocks restaurant mail draft creation through exec so drafts must use the structured Mail Layer tool", async () => {
+    installOpenClawOwnedToolHooks();
+    const execute = vi.fn(async () => textToolResult("ran"));
+    const tool = wrapToolWithBeforeToolCallHook(createContractTool("exec", execute), {
+      agentId: "restaurant",
+      sessionId: "session-restaurant",
+      sessionKey: "agent:restaurant:session-restaurant",
+      runId: "run-mail-draft",
+    });
+    const definition = toToolDefinitions([tool])[0];
+    if (!definition) {
+      throw new Error("missing embedded agent tool definition");
+    }
+
+    const result = await definition.execute(
+      "call-mail-draft",
+      { command: "python3 scripts/create_draft.py --account restaurant" },
+      undefined,
+      undefined,
+      createToolExtensionContext(),
+    );
+
+    expect(execute).not.toHaveBeenCalled();
+    expect(JSON.stringify(result)).toContain("mail_create_draft");
+  });
+
   it("reports embedded agent dynamic tool execution errors through after_tool_call", async () => {
     const adjustedParams = { timeoutSec: 1 };
     const mergedParams = { command: "false", timeoutSec: 1 };
