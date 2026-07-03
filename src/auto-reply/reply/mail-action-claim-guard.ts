@@ -14,6 +14,7 @@ type GuardMailActionClaimOptions = {
 
 const MAIL_ACTION_ID_PATTERN = /\bAction-ID\s*:?\s*(\d+)\b/gi;
 const MAIL_ACTION_CLAIM_GUARD_MARKER = "openclaw-local-mail-action-claim-guard-v1";
+const MAIL_ACTION_LIVE_CLAIM_GUARD_MARKER = "openclaw-local-mail-action-live-claim-guard-v1";
 
 const MAIL_SUCCESS_CLAIM_PATTERN =
   /(?:\b[\w-]*Entwurf[\w-]*\s+(?:erstellt|aktualisiert|angelegt|neu erstellt)\b|\bDer Entwurf liegt\b|\bliegt in\s+\*\*?Entw[uü]rfe\b|\bwurde\s+versendet\b|\bMail\s+wurde\s+versendet\b|\bE-?Mail\s+wurde\s+versendet\b|\bVersendet\.\b|\bGesendet-UID\b)/iu;
@@ -36,6 +37,18 @@ function extractActionIds(text: string): number[] {
 
 function looksLikeMailSuccessClaim(text: string): boolean {
   return MAIL_SUCCESS_CLAIM_PATTERN.test(text);
+}
+
+export function shouldSuppressLiveMailActionClaim(text: string | undefined): boolean {
+  if (!text || process.env.OPENCLAW_MAIL_ACTION_CLAIM_GUARD === "0") {
+    return false;
+  }
+  if (
+    process.env.OPENCLAW_MAIL_ACTION_LIVE_CLAIM_GUARD_MARKER === MAIL_ACTION_LIVE_CLAIM_GUARD_MARKER
+  ) {
+    void text;
+  }
+  return extractActionIds(text).length > 0 && looksLikeMailSuccessClaim(text);
 }
 
 async function lookupSqliteMailActionIds(
@@ -91,7 +104,7 @@ export async function guardUnverifiedMailActionClaim(
   }
 
   const actionIds = extractActionIds(text);
-  if (actionIds.length === 0 || !looksLikeMailSuccessClaim(text)) {
+  if (!shouldSuppressLiveMailActionClaim(text)) {
     return text;
   }
 

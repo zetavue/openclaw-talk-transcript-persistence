@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { guardUnverifiedMailActionClaim } from "./mail-action-claim-guard.js";
+import {
+  guardUnverifiedMailActionClaim,
+  shouldSuppressLiveMailActionClaim,
+} from "./mail-action-claim-guard.js";
 
 describe("guardUnverifiedMailActionClaim", () => {
   it("replaces draft-created claims when the action id is not registered", async () => {
@@ -37,5 +40,17 @@ describe("guardUnverifiedMailActionClaim", () => {
         lookupActionIds: async () => new Set(),
       }),
     ).resolves.toBe(text);
+  });
+
+  it("suppresses live streaming mail action success claims before final validation", () => {
+    expect(
+      shouldSuppressLiveMailActionClaim(
+        "Test-Mail-Entwurf erstellt (Action-ID 79). Der Entwurf liegt in Entwuerfe.",
+      ),
+    ).toBe(true);
+  });
+
+  it("does not suppress live non-mail diagnostics", () => {
+    expect(shouldSuppressLiveMailActionClaim("ERROR: mail action not found: 79")).toBe(false);
   });
 });

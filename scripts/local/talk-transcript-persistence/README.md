@@ -25,7 +25,8 @@ upstream package has overwritten the local changes.
 - `voice-command-guard`: optional local patch for Telegram voice intent safety. Missing
   bundle is WARN-only and must never prevent gateway startup.
 - Mail action claim guard: fail-closed marker check for the runtime guard that
-  blocks unverified `Action-ID` success claims before they reach Telegram.
+  blocks unverified `Action-ID` success claims before they reach Telegram,
+  including the live/block streaming path.
 
 ## Files
 

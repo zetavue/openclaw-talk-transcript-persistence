@@ -69,6 +69,7 @@ PROVIDER_MEDIA_REF_HINT_MARKERS = (
 )
 MAIL_ACTION_CLAIM_GUARD_MARKERS = (
     "openclaw-local-mail-action-claim-guard-v1",
+    "openclaw-local-mail-action-live-claim-guard-v1",
     "Mail-Aktion nicht bestaetigt.",
     "OPENCLAW_MAIL_ACTION_CLAIM_GUARD",
 )
