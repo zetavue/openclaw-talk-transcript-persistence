@@ -64,6 +64,10 @@ import {
   resolveStoredModelOverride,
 } from "./stored-model-override.js";
 import { createTypingController } from "./typing.js";
+import {
+  analyzeVoiceCommandIntent,
+  type VoiceCommandIntentResult,
+} from "./voice-command-intent.js";
 
 type ResetCommandAction = "new" | "reset";
 
@@ -109,6 +113,7 @@ const replyResolverTimingLog = createSubsystemLogger("auto-reply/reply-resolver-
 const commandsCoreRuntimeLoader = createLazyImportLoader(
   () => import("./commands-core.runtime.js"),
 );
+const VOICE_COMMAND_GUARD_PREFIX = "VOICE_COMMAND_GUARD:";
 
 function loadSessionResetModelRuntime() {
   return sessionResetModelRuntimeLoader.load();
@@ -174,6 +179,120 @@ function hasLinkCandidate(ctx: MsgContext): boolean {
     return false;
   }
   return /\bhttps?:\/\/\S+/i.test(message);
+}
+
+function isVoiceCommandGuardText(value: string | undefined): value is string {
+  return typeof value === "string" && value.startsWith(VOICE_COMMAND_GUARD_PREFIX);
+}
+
+function applyVoiceCommandGuardToContext(
+  target: MsgContext,
+  guardedBody: string,
+  voiceText?: string,
+): void {
+  target.Body = guardedBody;
+  target.BodyForAgent = guardedBody;
+  target.BodyForCommands = guardedBody;
+  target.CommandBody = guardedBody;
+  if (!normalizeOptionalString(target.RawBody) && voiceText) {
+    target.RawBody = voiceText;
+  }
+}
+
+function maybeApplyVoiceCommandGuard(
+  sourceCtx: MsgContext,
+  finalizedCtx: MsgContext,
+  agentId?: string,
+): VoiceCommandIntentResult | undefined {
+  const provider = normalizeOptionalString(finalizedCtx.Provider ?? sourceCtx.Provider);
+  if (provider?.toLowerCase() !== "telegram") {
+    return undefined;
+  }
+
+  const sourceRecord = sourceCtx as Record<string, unknown>;
+  const finalizedRecord = finalizedCtx as Record<string, unknown>;
+  const transcript = normalizeOptionalString(
+    finalizedRecord.AudioTranscriptText ?? sourceRecord.AudioTranscriptText,
+  );
+  const mediaType = normalizeOptionalString(finalizedCtx.MediaType ?? sourceCtx.MediaType);
+  const body = normalizeOptionalString(finalizedCtx.Body ?? sourceCtx.Body);
+  const voiceText = transcript ?? body;
+  const isAudioTurn = Boolean(transcript) || /^audio\//i.test(mediaType ?? "");
+
+  if (!isAudioTurn || !voiceText) {
+    return undefined;
+  }
+
+  const intentResult = analyzeVoiceCommandIntent({
+    text: voiceText,
+    channel: provider,
+    agentId,
+  });
+
+  const existingGuard =
+    [
+      normalizeOptionalString(finalizedCtx.Body),
+      normalizeOptionalString(finalizedCtx.BodyForAgent),
+      normalizeOptionalString(finalizedCtx.BodyForCommands),
+      normalizeOptionalString(finalizedCtx.CommandBody),
+      normalizeOptionalString(sourceCtx.Body),
+      normalizeOptionalString(sourceCtx.BodyForAgent),
+      normalizeOptionalString(sourceCtx.BodyForCommands),
+      normalizeOptionalString(sourceCtx.CommandBody),
+    ].find((value): value is string => isVoiceCommandGuardText(value)) ?? null;
+
+  const guardedBody =
+    existingGuard ??
+    (() => {
+      const guard = [
+        VOICE_COMMAND_GUARD_PREFIX,
+        `intent: ${intentResult.intent}`,
+        `risk: ${intentResult.risk}`,
+        `confidence: ${intentResult.confidence}`,
+        `requires_confirmation: ${intentResult.requiresConfirmation ? "yes" : "no"}`,
+        `grounding_required: ${intentResult.groundingRequired ? "yes" : "no"}`,
+        intentResult.evidenceTerms.length
+          ? `evidence_terms: ${intentResult.evidenceTerms.join(", ")}`
+          : "evidence_terms: none",
+        intentResult.missingFields.length
+          ? `missing_fields: ${intentResult.missingFields.join(", ")}`
+          : "missing_fields: none",
+        `instruction: ${intentResult.confirmationHint}`,
+      ].join("\n");
+      return `${guard}\n\nTRANSCRIBED_VOICE_TEXT:\n${voiceText}`;
+    })();
+
+  applyVoiceCommandGuardToContext(sourceCtx, guardedBody, transcript ?? body);
+  applyVoiceCommandGuardToContext(finalizedCtx, guardedBody, transcript ?? body);
+  return intentResult;
+}
+
+function formatVoiceIntentLabel(intent: VoiceCommandIntentResult["intent"]): string {
+  switch (intent) {
+    case "mail.send":
+      return "Mail senden";
+    case "mail.delete_draft":
+      return "Entwurf loeschen";
+    default:
+      return intent;
+  }
+}
+
+function maybeBuildHighRiskVoiceIntentConfirmation(
+  intentResult?: VoiceCommandIntentResult,
+): ReplyPayload | undefined {
+  if (
+    !intentResult ||
+    (intentResult.intent !== "mail.send" && intentResult.intent !== "mail.delete_draft")
+  ) {
+    return undefined;
+  }
+  const evidence = intentResult.evidenceTerms[0];
+  return {
+    text: `Meinst du ${formatVoiceIntentLabel(intentResult.intent)}${
+      evidence ? ` fuer ${evidence}` : ""
+    }?`,
+  };
 }
 
 async function applyMediaUnderstandingIfNeeded(params: {
@@ -295,6 +414,7 @@ export async function getReplyFromConfig(
       };
     },
   );
+  const voiceIntentResult = maybeApplyVoiceCommandGuard(ctx, finalized, agentId);
   const traceAttributes = resolverTiming.measureSync("reply.resolve_trace_context", () => ({
     surface: normalizeOptionalString(finalized.Surface ?? finalized.Provider) ?? "unknown",
     hasSessionKey: Boolean(agentSessionKey),
@@ -326,6 +446,11 @@ export async function getReplyFromConfig(
         attributes: traceAttributes,
       }),
     );
+  const highRiskVoiceConfirmation = maybeBuildHighRiskVoiceIntentConfirmation(voiceIntentResult);
+  if (highRiskVoiceConfirmation) {
+    logResolverTiming("completed", "high_risk_voice_confirmation");
+    return highRiskVoiceConfirmation;
+  }
   const mergedSkillFilter = resolverTiming.measureSync("reply.resolve_skill_filter", () =>
     mergeSkillFilters(opts?.skillFilter, resolveAgentSkillsFilter(cfg, agentId)),
   );

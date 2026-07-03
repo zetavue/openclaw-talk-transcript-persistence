@@ -18,6 +18,7 @@ const MAX_UNTRUSTED_JSON_STRING_CHARS = 2_000;
 const MAX_UNTRUSTED_HISTORY_ENTRIES = 20;
 const MAX_UNTRUSTED_TRANSCRIPT_FIELD_CHARS = 500;
 const INBOUND_SOURCE_MODALITIES = new Set(["text", "voice", "audio", "image", "video", "document"]);
+const OPENCLAW_LOCAL_PROVIDER_MEDIA_REF_HINT_MARKER = "openclaw-local-provider-media-ref-hint-v1";
 
 /** Options for building the user-context prefix added to inbound prompts. */
 type InboundUserContextPrefixOptions = {
@@ -230,6 +231,21 @@ function formatStructuredContextRelation(value: unknown): string | undefined {
   return relation?.replaceAll("_", " ");
 }
 
+function normalizePromptMediaLocator(value: Record<string, unknown>): string | undefined {
+  const mediaPath = normalizePromptMediaPath(value["media_path"]);
+  if (mediaPath) {
+    return mediaPath;
+  }
+  const mediaRef = sanitizeTranscriptField(value["media_ref"]);
+  if (!mediaRef) {
+    return undefined;
+  }
+  if (mediaRef.startsWith("telegram:file/")) {
+    return `${mediaRef} (provider-only; not image-tool-readable)`;
+  }
+  return mediaRef;
+}
+
 function formatChatWindowMessage(
   value: unknown,
   envelope?: EnvelopeFormatOptions,
@@ -242,8 +258,7 @@ function formatChatWindowMessage(
   const timestamp = formatConversationTimestamp(value["timestamp_ms"], envelope);
   const replyToId = sanitizeTranscriptField(value["reply_to_id"]);
   const mediaType = sanitizeTranscriptField(value["media_type"]);
-  const mediaLocator =
-    normalizePromptMediaPath(value["media_path"]) ?? sanitizeTranscriptField(value["media_ref"]);
+  const mediaLocator = normalizePromptMediaLocator(value);
   const body = sanitizeTranscriptBody(value["body"]);
   const details = [
     messageId ? `#${messageId}` : undefined,

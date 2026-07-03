@@ -39,6 +39,10 @@ MARKERS = (
     "function enqueueRelayTranscriptPersistence(session, params)",
     "transcriptWriteQueue: Promise.resolve()",
 )
+VOICE_COMMAND_GUARD_MARKERS = (
+    "VOICE_COMMAND_GUARD",
+    "openclaw-local-voice-command-guard-v1",
+)
 TELEGRAM_SEND_MARKERS = (
     'const OPENCLAW_LOCAL_TELEGRAM_OUTBOUND_DEDUPE_MARKER = "openclaw-local-telegram-outbound-dedupe-v1";',
     "function buildOpenClawLocalTelegramOutboundDedupeKey(params)",
@@ -52,6 +56,16 @@ TELEGRAM_MIRROR_MARKERS = (
     'const OPENCLAW_LOCAL_TELEGRAM_DELIVERY_MIRROR_DEDUPE_MARKER = "openclaw-local-telegram-delivery-mirror-dedupe-v1";',
     "const latestAssistant = await readLatestAssistantTextByIdentity({",
     "latestAssistant?.text?.trim() === text.trim()",
+)
+TELEGRAM_VISIBLE_REPLY_MARKERS = (
+    'const OPENCLAW_LOCAL_TELEGRAM_VISIBLE_REPLY_DEDUPE_MARKER = "openclaw-local-telegram-visible-reply-dedupe-v1";',
+    "function buildOpenClawLocalTelegramVisibleReplyDedupeKey(params)",
+    "rememberOpenClawLocalTelegramVisibleReply(visibleReplyDedupeKey)",
+)
+PROVIDER_MEDIA_REF_HINT_MARKERS = (
+    'const OPENCLAW_LOCAL_PROVIDER_MEDIA_REF_HINT_MARKER = "openclaw-local-provider-media-ref-hint-v1";',
+    "function normalizePromptMediaLocator(value)",
+    'mediaRef.startsWith("telegram:file/")',
 )
 
 
@@ -102,6 +116,19 @@ def find_dist_bundle(label: str, required: tuple[str, ...]) -> Path:
             candidates.append(path)
     if not candidates:
         fail(f"no {label} bundle found under {DIST}")
+    candidates.sort(key=lambda candidate: candidate.stat().st_mtime, reverse=True)
+    return candidates[0]
+
+
+def find_optional_dist_bundle(label: str, required: tuple[str, ...]) -> Path | None:
+    candidates: list[Path] = []
+    for path in DIST.glob("*.js"):
+        text = path.read_text(encoding="utf-8", errors="ignore")
+        if all(marker in text for marker in required):
+            candidates.append(path)
+    if not candidates:
+        log(f"WARN: no {label} bundle found under {DIST}; skipping optional patch")
+        return None
     candidates.sort(key=lambda candidate: candidate.stat().st_mtime, reverse=True)
     return candidates[0]
 
@@ -475,6 +502,85 @@ def patch_telegram_delivery_mirror_text(text: str) -> str:
     return text
 
 
+def patch_telegram_visible_reply_text(text: str) -> str:
+    if has_markers(text, TELEGRAM_VISIBLE_REPLY_MARKERS):
+        return text
+    helper = '''const OPENCLAW_LOCAL_TELEGRAM_VISIBLE_REPLY_DEDUPE_MARKER = "openclaw-local-telegram-visible-reply-dedupe-v1";
+const OPENCLAW_LOCAL_TELEGRAM_VISIBLE_REPLY_DEDUPE_TTL_MS = 5 * 60 * 1000;
+const openclawLocalTelegramVisibleReplyDedupe = /* @__PURE__ */ new Map();
+function normalizeOpenClawLocalTelegramVisibleReplyText(text) {
+\treturn String(text ?? "").replace(/\\s+/gu, " ").trim();
+}
+function pruneOpenClawLocalTelegramVisibleReplyDedupe(now) {
+\tfor (const [key, entry] of openclawLocalTelegramVisibleReplyDedupe) if (now - entry.at > OPENCLAW_LOCAL_TELEGRAM_VISIBLE_REPLY_DEDUPE_TTL_MS) openclawLocalTelegramVisibleReplyDedupe.delete(key);
+}
+function buildOpenClawLocalTelegramVisibleReplyDedupeKey(params) {
+\tconst normalized = normalizeOpenClawLocalTelegramVisibleReplyText(params.text);
+\tif (!normalized) return;
+\treturn [params.accountId ?? "", params.chatId ?? "", params.threadId ?? "", params.turnId ?? "", params.silent === true ? "silent" : "normal", normalized].join("\\u001f");
+}
+function hasOpenClawLocalTelegramVisibleReply(key) {
+\tconst now = Date.now();
+\tpruneOpenClawLocalTelegramVisibleReplyDedupe(now);
+\treturn openclawLocalTelegramVisibleReplyDedupe.has(key);
+}
+function rememberOpenClawLocalTelegramVisibleReply(key) {
+\tconst now = Date.now();
+\tpruneOpenClawLocalTelegramVisibleReplyDedupe(now);
+\topenclawLocalTelegramVisibleReplyDedupe.set(key, { at: now });
+}
+'''
+    text = replace_once(
+        text,
+        "const MAX_PROGRESS_MARKDOWN_TEXT_CHARS = 300;\n",
+        helper + "const MAX_PROGRESS_MARKDOWN_TEXT_CHARS = 300;\n",
+        "telegram visible reply helper anchor",
+    )
+    text = replace_once(
+        text,
+        "\t\tconst sendPayload = async (payload, options) => {\n\t\t\tif (isDispatchSuperseded()) return false;\n\t\t\tconst deliverablePayload = applyQuoteReplyTarget(payload);\n\t\t\tconst silent = options?.silent ?? (silentErrorReplies && payload.isError === true);\n\t\t\tconst durableDelivery = telegramDeps.deliverInboundReplyWithMessageSendContext;\n",
+        "\t\tconst sendPayload = async (payload, options) => {\n\t\t\tif (isDispatchSuperseded()) return false;\n\t\t\tconst deliverablePayload = applyQuoteReplyTarget(payload);\n\t\t\tconst silent = options?.silent ?? (silentErrorReplies && payload.isError === true);\n\t\t\tconst visibleReplyDedupeKey = buildOpenClawLocalTelegramVisibleReplyDedupeKey({\n\t\t\t\taccountId: route.accountId,\n\t\t\t\tchatId: String(chatId),\n\t\t\t\tthreadId: threadSpec.id,\n\t\t\t\tturnId: transcriptMirrorTurnId,\n\t\t\t\ttext: deliverablePayload.text,\n\t\t\t\tsilent\n\t\t\t});\n\t\t\tif (visibleReplyDedupeKey && hasOpenClawLocalTelegramVisibleReply(visibleReplyDedupeKey)) {\n\t\t\t\tlogVerbose(\"telegram visible reply duplicate suppressed by local post-update patch\");\n\t\t\t\tdeliveryState.markDelivered();\n\t\t\t\treturn true;\n\t\t\t}\n\t\t\tconst durableDelivery = telegramDeps.deliverInboundReplyWithMessageSendContext;\n",
+        "telegram visible reply pre-send anchor",
+    )
+    text = replace_once(
+        text,
+        "\t\t\t\tif (durable.status === \"handled_visible\") {\n\t\t\t\t\tdeliveryState.markDelivered();\n\t\t\t\t\treturn true;\n\t\t\t\t}\n",
+        "\t\t\t\tif (durable.status === \"handled_visible\") {\n\t\t\t\t\tif (visibleReplyDedupeKey) rememberOpenClawLocalTelegramVisibleReply(visibleReplyDedupeKey);\n\t\t\t\t\tdeliveryState.markDelivered();\n\t\t\t\t\treturn true;\n\t\t\t\t}\n",
+        "telegram visible reply durable success anchor",
+    )
+    text = replace_once(
+        text,
+        "\t\t\tif (result.delivered) deliveryState.markDelivered();\n\t\t\treturn result.delivered;\n",
+        "\t\t\tif (result.delivered) {\n\t\t\t\tif (visibleReplyDedupeKey) rememberOpenClawLocalTelegramVisibleReply(visibleReplyDedupeKey);\n\t\t\t\tdeliveryState.markDelivered();\n\t\t\t}\n\t\t\treturn result.delivered;\n",
+        "telegram visible reply fallback success anchor",
+    )
+    return text
+
+
+def patch_provider_media_ref_hint_text(text: str) -> str:
+    if has_markers(text, PROVIDER_MEDIA_REF_HINT_MARKERS):
+        return text
+    text = replace_once(
+        text,
+        'const INBOUND_SOURCE_MODALITIES = new Set([\n\t"text",\n\t"voice",\n\t"audio",\n\t"image",\n\t"video",\n\t"document"\n]);\n',
+        'const INBOUND_SOURCE_MODALITIES = new Set([\n\t"text",\n\t"voice",\n\t"audio",\n\t"image",\n\t"video",\n\t"document"\n]);\nconst OPENCLAW_LOCAL_PROVIDER_MEDIA_REF_HINT_MARKER = "openclaw-local-provider-media-ref-hint-v1";\n',
+        "provider media ref marker anchor",
+    )
+    text = replace_once(
+        text,
+        'function formatChatWindowMessage(value, envelope) {\n',
+        'function normalizePromptMediaLocator(value) {\n\tconst mediaPath = normalizePromptMediaPath(value["media_path"]);\n\tif (mediaPath) return mediaPath;\n\tconst mediaRef = sanitizeTranscriptField(value["media_ref"]);\n\tif (!mediaRef) return;\n\tif (mediaRef.startsWith("telegram:file/")) return `${mediaRef} (provider-only; not image-tool-readable)`;\n\treturn mediaRef;\n}\nfunction formatChatWindowMessage(value, envelope) {\n',
+        "provider media ref helper anchor",
+    )
+    text = replace_once(
+        text,
+        'const mediaLocator = normalizePromptMediaPath(value["media_path"]) ?? sanitizeTranscriptField(value["media_ref"]);\n',
+        'const mediaLocator = normalizePromptMediaLocator(value);\n',
+        "provider media ref locator anchor",
+    )
+    return text
+
+
 def patch_bundle(bundle: Path, markers: tuple[str, ...], patcher, label: str) -> bool:
     text = bundle.read_text(encoding="utf-8")
     log(f"checking {label} bundle={bundle}")
@@ -520,6 +626,26 @@ def main() -> int:
     )
     patch_bundle(telegram_context_bundle, TELEGRAM_CONTEXT_MARKERS, patch_telegram_context_text, "telegram-context-dedupe")
     patch_bundle(telegram_context_bundle, TELEGRAM_MIRROR_MARKERS, patch_telegram_delivery_mirror_text, "telegram-delivery-mirror-dedupe")
+    patch_bundle(telegram_context_bundle, TELEGRAM_VISIBLE_REPLY_MARKERS, patch_telegram_visible_reply_text, "telegram-visible-reply-dedupe")
+    find_optional_dist_bundle(
+        "voice-command-guard",
+        VOICE_COMMAND_GUARD_MARKERS,
+    )
+    get_reply_bundle = find_optional_dist_bundle(
+        "get-reply inbound metadata",
+        (
+            "function formatChatWindowMessage(value, envelope)",
+            "Current local chat window",
+            "media_ref",
+        ),
+    )
+    if get_reply_bundle is not None:
+        patch_bundle(
+            get_reply_bundle,
+            PROVIDER_MEDIA_REF_HINT_MARKERS,
+            patch_provider_media_ref_hint_text,
+            "provider-media-ref-hint",
+        )
     return 0
 
 

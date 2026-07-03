@@ -19,6 +19,11 @@ upstream package has overwritten the local changes.
   Telegram cache/mirror history.
 - Telegram delivery-mirror dedupe: suppresses transcript mirror rows when the
   latest assistant transcript text already matches the delivered Telegram final.
+- Telegram visible-reply dedupe: suppresses repeated visible Telegram replies
+  within the same inbound Telegram turn, covering the bot streaming/final
+  delivery path that does not always go through the generic send tool.
+- `voice-command-guard`: optional local patch for Telegram voice intent safety. Missing
+  bundle is WARN-only and must never prevent gateway startup.
 
 ## Files
 
@@ -53,6 +58,7 @@ openclaw-talk-transcript-guard: PASS: talk-transcript-persistence markers alread
 openclaw-talk-transcript-guard: PASS: telegram-outbound-dedupe markers already present
 openclaw-talk-transcript-guard: PASS: telegram-context-dedupe markers already present
 openclaw-talk-transcript-guard: PASS: telegram-delivery-mirror-dedupe markers already present
+openclaw-talk-transcript-guard: PASS: telegram-visible-reply-dedupe markers already present
 ```
 
 ## Environment Overrides
