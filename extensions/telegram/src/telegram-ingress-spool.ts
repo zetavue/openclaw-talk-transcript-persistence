@@ -16,8 +16,11 @@ import { normalizeTelegramStateAccountId } from "./state-account-id.js";
 
 const SPOOL_VERSION = 1;
 const TELEGRAM_INGRESS_SPOOL_PREFIX = "ingress-spool-";
+export const OPENCLAW_LOCAL_TELEGRAM_INGRESS_WATCHDOG_MARKER =
+  "openclaw-local-telegram-ingress-watchdog-v1";
 export const TELEGRAM_SPOOLED_UPDATE_PROCESSING_STALE_MS = 6 * 60 * 60 * 1000;
 export const TELEGRAM_SPOOLED_UPDATE_CLAIM_LEASE_MS = 30 * 60 * 1000;
+export const TELEGRAM_SPOOLED_UPDATE_PENDING_STALL_MS = 5 * 60 * 1000;
 const TELEGRAM_SPOOLED_UPDATE_FAILED_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const TELEGRAM_SPOOLED_UPDATE_FAILED_MAX_ENTRIES = 1000;
 const TELEGRAM_SPOOLED_UPDATE_PROCESS_ID = `${process.pid}:${randomUUID()}`;
@@ -45,6 +48,13 @@ export type TelegramSpooledUpdate = {
   lastAttemptAt?: number;
   lastError?: string;
   claim?: TelegramSpooledUpdateClaimOwner;
+};
+
+export type TelegramStalledSpooledUpdateSummary = {
+  count: number;
+  oldestAgeMs: number;
+  oldestReceivedAt?: number;
+  sampleUpdateIds: number[];
 };
 
 export type ClaimedTelegramSpooledUpdate = TelegramSpooledUpdate & {
@@ -282,6 +292,45 @@ export async function listTelegramSpooledUpdates(params: {
       return update ? [update] : [];
     }),
   );
+}
+
+export async function summarizeStalledTelegramSpooledUpdates(params: {
+  spoolDir: string;
+  staleMs?: number;
+  now?: number;
+  sampleLimit?: number;
+}): Promise<TelegramStalledSpooledUpdateSummary> {
+  const staleMs = Math.max(
+    0,
+    Math.floor(params.staleMs ?? TELEGRAM_SPOOLED_UPDATE_PENDING_STALL_MS),
+  );
+  const now = params.now ?? Date.now();
+  const sampleLimit = Math.max(1, Math.floor(params.sampleLimit ?? 5));
+  let count = 0;
+  let oldestReceivedAt: number | undefined;
+  const sampleUpdateIds: number[] = [];
+  const updates = await listTelegramSpooledUpdates({
+    spoolDir: params.spoolDir,
+    limit: "all",
+  });
+  for (const update of updates) {
+    if ((update.attempts ?? 0) > 0 || now - update.receivedAt < staleMs) {
+      continue;
+    }
+    count += 1;
+    if (oldestReceivedAt === undefined || update.receivedAt < oldestReceivedAt) {
+      oldestReceivedAt = update.receivedAt;
+    }
+    if (sampleUpdateIds.length < sampleLimit) {
+      sampleUpdateIds.push(update.updateId);
+    }
+  }
+  return {
+    count,
+    oldestAgeMs: oldestReceivedAt === undefined ? 0 : Math.max(0, now - oldestReceivedAt),
+    oldestReceivedAt,
+    sampleUpdateIds,
+  };
 }
 
 export async function deleteTelegramSpooledUpdate(update: TelegramSpooledUpdate): Promise<void> {

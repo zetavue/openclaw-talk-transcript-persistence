@@ -86,6 +86,15 @@ import { prepareReplySessionParentFork } from "./session-parent-fork-prepare.js"
 import { clearSessionResetRuntimeState } from "./session-reset-cleanup.js";
 
 const log = createSubsystemLogger("session-init");
+const REPLY_SESSION_INIT_CONFLICT_RETRY_MARKER =
+  "openclaw-local-reply-session-init-conflict-retry-v1";
+const REPLY_SESSION_INIT_CONFLICT_RETRY_DELAYS_MS = [250, 750, 1500] as const;
+
+function sleepReplySessionInitConflictRetry(delayMs: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, delayMs);
+  });
+}
 
 function stripThreadFromSessionRoute(route: SessionEntry["route"]): SessionEntry["route"] {
   const normalized = normalizeDeliveryChannelRoute(route);
@@ -246,12 +255,13 @@ function resolveBoundConversationSessionKey(params: {
 
 /** Initializes or reuses the reply session state for one inbound turn. */
 export async function initSessionState(params: InitSessionStateParams): Promise<SessionInitResult> {
-  return await initSessionStateAttempt(params, false);
+  return await initSessionStateAttempt(params, false, 0);
 }
 
 async function initSessionStateAttempt(
   params: InitSessionStateParams,
   staleSnapshotRetried: boolean,
+  conflictRetryIndex: number,
 ): Promise<SessionInitResult> {
   const { ctx, cfg, commandAuthorized } = params;
   // Heartbeat, cron-event, and exec-event runs should NEVER trigger session
@@ -858,7 +868,15 @@ async function initSessionStateAttempt(
   });
   if (!committed.ok) {
     if (!staleSnapshotRetried) {
-      return await initSessionStateAttempt(params, true);
+      return await initSessionStateAttempt(params, true, conflictRetryIndex);
+    }
+    const delayMs = REPLY_SESSION_INIT_CONFLICT_RETRY_DELAYS_MS[conflictRetryIndex];
+    if (delayMs !== undefined) {
+      log.warn(
+        `${REPLY_SESSION_INIT_CONFLICT_RETRY_MARKER}: reply session initialization conflicted for ${sessionKey}; retrying after ${delayMs}ms (${conflictRetryIndex + 1}/${REPLY_SESSION_INIT_CONFLICT_RETRY_DELAYS_MS.length})`,
+      );
+      await sleepReplySessionInitConflictRetry(delayMs);
+      return await initSessionStateAttempt(params, true, conflictRetryIndex + 1);
     }
     throw new Error(`reply session initialization conflicted for ${sessionKey}`);
   }

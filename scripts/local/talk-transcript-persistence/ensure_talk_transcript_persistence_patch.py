@@ -87,6 +87,15 @@ MAIL_DRAFT_EXEC_BLOCK_MARKERS = (
     "openclaw-local-mail-draft-exec-block-v1",
     "Direct create_draft.py via exec/bash is blocked",
 )
+TELEGRAM_INGRESS_WATCHDOG_MARKERS = (
+    "openclaw-local-telegram-ingress-watchdog-v1",
+    "summarizeStalledTelegramSpooledUpdates",
+    "TELEGRAM_SPOOLED_UPDATE_PENDING_STALL_MS",
+)
+REPLY_SESSION_INIT_CONFLICT_RETRY_MARKERS = (
+    "openclaw-local-reply-session-init-conflict-retry-v1",
+    "REPLY_SESSION_INIT_CONFLICT_RETRY_DELAYS_MS",
+)
 source_dist_rebuilt = False
 
 
@@ -759,6 +768,26 @@ def main() -> int:
         MAIL_DRAFT_EXEC_BLOCK_MARKERS,
         lambda text: text,
         "mail-draft-exec-block",
+    )
+    telegram_ingress_watchdog_bundle = find_source_backed_dist_bundle(
+        "telegram-ingress-watchdog",
+        TELEGRAM_INGRESS_WATCHDOG_MARKERS,
+    )
+    patch_bundle(
+        telegram_ingress_watchdog_bundle,
+        TELEGRAM_INGRESS_WATCHDOG_MARKERS,
+        lambda text: text,
+        "telegram-ingress-watchdog",
+    )
+    reply_session_init_conflict_retry_bundle = find_source_backed_dist_bundle(
+        "reply-session-init-conflict-retry",
+        REPLY_SESSION_INIT_CONFLICT_RETRY_MARKERS,
+    )
+    patch_bundle(
+        reply_session_init_conflict_retry_bundle,
+        REPLY_SESSION_INIT_CONFLICT_RETRY_MARKERS,
+        lambda text: text,
+        "reply-session-init-conflict-retry",
     )
     return 0
 

@@ -23,9 +23,15 @@ Git-managed local OpenClaw source tree when source-level local fixes are missing
 - Telegram visible-reply dedupe: suppresses repeated visible Telegram replies
   within the same inbound Telegram turn, covering the bot streaming/final
   delivery path that does not always go through the generic send tool.
+- Telegram ingress watchdog: source-backed restart guard for isolated Telegram
+  polling when unattempted `pending` spool updates age out with no active spool
+  handler, which recovers dispatcher stalls after network/suspend issues.
 - `voice-command-guard`: source-backed local fix for Telegram voice intent safety.
   If an OpenClaw update overwrites it, the guard rebuilds the local source tree
   and syncs `dist/` back into the global installation.
+- Reply session init conflict retry: source-backed limited backoff for transient
+  `reply session initialization conflicted` races, so WebUI observation does not
+  immediately abort Telegram replay processing.
 - Mail action claim guard: source-backed runtime guard that blocks unverified
   `Action-ID` success claims before they reach Telegram, including the live/block
   streaming path.
@@ -71,6 +77,8 @@ openclaw-talk-transcript-guard: PASS: voice-command-guard markers already presen
 openclaw-talk-transcript-guard: PASS: mail-action-claim-guard markers already present
 openclaw-talk-transcript-guard: PASS: structured-mail-create-draft-tool markers already present
 openclaw-talk-transcript-guard: PASS: mail-draft-exec-block markers already present
+openclaw-talk-transcript-guard: PASS: telegram-ingress-watchdog markers already present
+openclaw-talk-transcript-guard: PASS: reply-session-init-conflict-retry markers already present
 ```
 
 ## Environment Overrides
