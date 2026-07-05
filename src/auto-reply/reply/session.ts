@@ -88,7 +88,7 @@ import { clearSessionResetRuntimeState } from "./session-reset-cleanup.js";
 const log = createSubsystemLogger("session-init");
 const REPLY_SESSION_INIT_CONFLICT_RETRY_MARKER =
   "openclaw-local-reply-session-init-conflict-retry-v1";
-const REPLY_SESSION_INIT_CONFLICT_RETRY_DELAYS_MS = [250, 750, 1500] as const;
+const REPLY_SESSION_INIT_CONFLICT_RETRY_DELAYS_MS = [250, 750, 1500, 3000, 5000, 8000] as const;
 
 function sleepReplySessionInitConflictRetry(delayMs: number): Promise<void> {
   return new Promise((resolve) => {
