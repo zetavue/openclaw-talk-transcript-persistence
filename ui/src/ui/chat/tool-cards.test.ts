@@ -78,6 +78,42 @@ describe("tool-cards", () => {
     expect(container.querySelector(".chat-tool-card__block-empty")).toBeNull();
   });
 
+  it("renders a mail draft approval button from send button tool output", () => {
+    const container = document.createElement("div");
+    const onSendMailDraftApproval = vi.fn();
+    render(
+      renderToolCard(
+        {
+          id: "msg:mail-draft:call-1",
+          name: "mail_create_draft",
+          outputText: JSON.stringify({
+            ok: true,
+            action_id: 78,
+            short_approval: "Senden freigeben: Action 78",
+            send_buttons: [
+              [
+                {
+                  text: "Senden freigeben",
+                  callback_data: "Senden freigeben: Action 78",
+                  style: "success",
+                },
+              ],
+            ],
+          }),
+        },
+        { expanded: true, onToggleExpanded: vi.fn(), onSendMailDraftApproval },
+      ),
+      container,
+    );
+
+    const button = container.querySelector<HTMLButtonElement>(".chat-tool-card__mail-approval-btn");
+    expect(button?.textContent?.trim()).toBe("Senden freigeben");
+
+    button?.click();
+
+    expect(onSendMailDraftApproval).toHaveBeenCalledWith("Senden freigeben: Action 78");
+  });
+
   it("labels collapsed tool calls with the display summary", () => {
     const container = document.createElement("div");
     render(

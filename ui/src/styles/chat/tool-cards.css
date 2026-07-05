@@ -483,6 +483,42 @@
   max-height: 52px;
 }
 
+.chat-tool-card__mail-approval {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+
+.chat-tool-card__mail-approval-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  max-width: 100%;
+  padding: 7px 12px;
+  border: 1px solid color-mix(in srgb, var(--ok) 55%, var(--border) 45%);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--ok) 14%, var(--card) 86%);
+  color: color-mix(in srgb, var(--ok) 82%, var(--text) 18%);
+  font: inherit;
+  font-size: var(--control-ui-text-sm);
+  font-weight: 600;
+  line-height: 1.2;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+  transition:
+    background 150ms ease-out,
+    border-color 150ms ease-out,
+    color 150ms ease-out;
+}
+
+.chat-tool-card__mail-approval-btn:hover,
+.chat-tool-card__mail-approval-btn:focus-visible {
+  border-color: color-mix(in srgb, var(--ok) 78%, var(--border-strong) 22%);
+  background: color-mix(in srgb, var(--ok) 20%, var(--card) 80%);
+  color: var(--text);
+}
+
 .chat-tools-summary {
   display: flex;
   align-items: center;

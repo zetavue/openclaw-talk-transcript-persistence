@@ -1,4 +1,7 @@
 // Verifies OpenClaw-owned tool hooks preserve adjusted params and telemetry.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type { AgentTool } from "openclaw/plugin-sdk/agent-core";
 import {
   installOpenClawOwnedToolHooks,
@@ -195,6 +198,149 @@ describe("OpenClaw-owned tool runtime contract - embedded agent adapter", () => 
 
     expect(execute).not.toHaveBeenCalled();
     expect(JSON.stringify(result)).toContain("mail_create_draft");
+  });
+
+  it("blocks Mail Layer sending through exec when the latest user message did not contain the confirmation", async () => {
+    installOpenClawOwnedToolHooks();
+    const execute = vi.fn(async () => textToolResult("ran"));
+    const tool = wrapToolWithBeforeToolCallHook(createContractTool("exec", execute), {
+      agentId: "restaurant",
+      sessionId: "session-mail-send",
+      sessionKey: "agent:restaurant:telegram:direct:1",
+      runId: "run-mail-send",
+    });
+    const definition = toToolDefinitions([tool])[0];
+    if (!definition) {
+      throw new Error("missing embedded agent tool definition");
+    }
+
+    const result = await definition.execute(
+      "call-mail-send",
+      {
+        command:
+          'python3 scripts/send_smtp.py --action-id 78 --confirmation "Senden freigeben: Action 78"',
+      },
+      undefined,
+      undefined,
+      createToolExtensionContext(),
+    );
+
+    expect(execute).not.toHaveBeenCalled();
+    expect(JSON.stringify(result)).toContain("mail-send-confirmation-guard");
+  });
+
+  it("allows Mail Layer sending through exec when the latest user message contains the short confirmation", async () => {
+    const previousOpenClawHome = process.env.OPENCLAW_HOME;
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-mail-send-guard-"));
+    try {
+      process.env.OPENCLAW_HOME = tmp;
+      const sessionDir = path.join(tmp, "agents", "restaurant", "sessions");
+      fs.mkdirSync(sessionDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(sessionDir, "session-mail-send.jsonl"),
+        [
+          JSON.stringify({
+            type: "message",
+            timestamp: "2026-07-05T16:07:51.913Z",
+            message: {
+              role: "user",
+              content: "Senden freigeben: Action 78",
+            },
+          }),
+        ].join("\n"),
+      );
+
+      installOpenClawOwnedToolHooks();
+      const execute = vi.fn(async () => textToolResult("ran"));
+      const tool = wrapToolWithBeforeToolCallHook(createContractTool("exec", execute), {
+        agentId: "restaurant",
+        sessionId: "session-mail-send",
+        sessionKey: "agent:restaurant:telegram:direct:1",
+        runId: "run-mail-send",
+      });
+      const definition = toToolDefinitions([tool])[0];
+      if (!definition) {
+        throw new Error("missing embedded agent tool definition");
+      }
+
+      const result = await definition.execute(
+        "call-mail-send",
+        {
+          command:
+            'python3 scripts/send_smtp.py --action-id 78 --confirmation "Senden freigeben: Action 78"',
+        },
+        undefined,
+        undefined,
+        createToolExtensionContext(),
+      );
+
+      expect(execute).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(result)).toContain("ran");
+    } finally {
+      if (previousOpenClawHome === undefined) {
+        delete process.env.OPENCLAW_HOME;
+      } else {
+        process.env.OPENCLAW_HOME = previousOpenClawHome;
+      }
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("allows Mail Layer sending through exec when a Telegram button callback contains the short confirmation", async () => {
+    const previousOpenClawHome = process.env.OPENCLAW_HOME;
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-mail-send-button-guard-"));
+    try {
+      process.env.OPENCLAW_HOME = tmp;
+      const sessionDir = path.join(tmp, "agents", "restaurant", "sessions");
+      fs.mkdirSync(sessionDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(sessionDir, "session-mail-send-button.jsonl"),
+        [
+          JSON.stringify({
+            type: "message",
+            timestamp: "2026-07-05T16:07:51.913Z",
+            message: {
+              role: "user",
+              content: "callback_data: Senden freigeben: Action 78",
+            },
+          }),
+        ].join("\n"),
+      );
+
+      installOpenClawOwnedToolHooks();
+      const execute = vi.fn(async () => textToolResult("ran"));
+      const tool = wrapToolWithBeforeToolCallHook(createContractTool("exec", execute), {
+        agentId: "restaurant",
+        sessionId: "session-mail-send-button",
+        sessionKey: "agent:restaurant:telegram:direct:1",
+        runId: "run-mail-send-button",
+      });
+      const definition = toToolDefinitions([tool])[0];
+      if (!definition) {
+        throw new Error("missing embedded agent tool definition");
+      }
+
+      const result = await definition.execute(
+        "call-mail-send-button",
+        {
+          command:
+            'python3 scripts/send_smtp.py --action-id 78 --confirmation "Senden freigeben: Action 78"',
+        },
+        undefined,
+        undefined,
+        createToolExtensionContext(),
+      );
+
+      expect(execute).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(result)).toContain("ran");
+    } finally {
+      if (previousOpenClawHome === undefined) {
+        delete process.env.OPENCLAW_HOME;
+      } else {
+        process.env.OPENCLAW_HOME = previousOpenClawHome;
+      }
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
   });
 
   it("reports embedded agent dynamic tool execution errors through after_tool_call", async () => {

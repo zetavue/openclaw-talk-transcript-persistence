@@ -14,8 +14,15 @@ import { isToolResultMessage } from "./role-normalizer.ts";
 import { formatToolOutputForSidebar, getTruncatedPreview } from "./tool-helpers.ts";
 
 export type ToolPreview = NonNullable<ToolCard["preview"]>;
+export type MailDraftApprovalHandler = (confirmation: string) => void | Promise<void>;
+
+type MailDraftApprovalAction = {
+  label: string;
+  confirmation: string;
+};
 
 type FullMessageRequest = NonNullable<SidebarContent["fullMessageRequest"]>;
+const MAIL_DRAFT_APPROVAL_PATTERN = /^Senden freigeben: Action \d+$/u;
 
 function resolveCanvasPreviewSandbox(preview: ToolPreview): string {
   return resolveEmbedSandbox(preview.kind === "canvas" ? "scripts" : "scripts");
@@ -148,6 +155,81 @@ export function isToolCardError(card: ToolCard): boolean {
     return card.isError;
   }
   return isToolErrorOutput(card.outputText);
+}
+
+function parseJsonObject(text: string | undefined): Record<string, unknown> | null {
+  const trimmed = text?.trim();
+  if (!trimmed || !trimmed.startsWith("{") || !trimmed.endsWith("}")) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(trimmed);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeMailDraftApprovalAction(
+  label: unknown,
+  confirmation: unknown,
+): MailDraftApprovalAction | undefined {
+  if (typeof confirmation !== "string") {
+    return undefined;
+  }
+  const normalizedConfirmation = confirmation.trim();
+  if (!MAIL_DRAFT_APPROVAL_PATTERN.test(normalizedConfirmation)) {
+    return undefined;
+  }
+  const normalizedLabel = typeof label === "string" ? label.trim() : "";
+  return {
+    label: normalizedLabel || "Senden freigeben",
+    confirmation: normalizedConfirmation,
+  };
+}
+
+function resolveMailDraftApprovalFromButtons(
+  buttons: unknown,
+): MailDraftApprovalAction | undefined {
+  if (!Array.isArray(buttons)) {
+    return undefined;
+  }
+  for (const row of buttons) {
+    if (!Array.isArray(row)) {
+      continue;
+    }
+    for (const button of row) {
+      if (!button || typeof button !== "object" || Array.isArray(button)) {
+        continue;
+      }
+      const action = normalizeMailDraftApprovalAction(
+        (button as Record<string, unknown>).text,
+        (button as Record<string, unknown>).callback_data,
+      );
+      if (action) {
+        return action;
+      }
+    }
+  }
+  return undefined;
+}
+
+export function resolveMailDraftApprovalAction(
+  card: ToolCard,
+): MailDraftApprovalAction | undefined {
+  if (card.name !== "mail_create_draft" || isToolCardError(card)) {
+    return undefined;
+  }
+  const output = parseJsonObject(card.outputText);
+  if (!output) {
+    return undefined;
+  }
+  return (
+    resolveMailDraftApprovalFromButtons(output.send_buttons) ??
+    normalizeMailDraftApprovalAction("Senden freigeben", output.short_approval)
+  );
 }
 
 export function extractToolPreview(
@@ -642,6 +724,7 @@ export function renderToolCard(
     sessionKey?: string;
     agentId?: string;
     onOpenSidebar?: (content: SidebarContent) => void;
+    onSendMailDraftApproval?: MailDraftApprovalHandler;
     canvasPluginSurfaceUrl?: string | null;
     embedSandboxMode?: EmbedSandboxMode;
     allowExternalEmbedUrls?: boolean;
@@ -680,6 +763,7 @@ export function renderToolCard(
                 opts.canvasPluginSurfaceUrl,
                 opts.embedSandboxMode ?? "scripts",
                 opts.allowExternalEmbedUrls ?? false,
+                opts.onSendMailDraftApproval,
               )}
             </div>
           `
@@ -695,6 +779,7 @@ export function renderExpandedToolCardContent(
   canvasPluginSurfaceUrl?: string | null,
   embedSandboxMode: EmbedSandboxMode = "scripts",
   allowExternalEmbedUrls = false,
+  onSendMailDraftApproval?: MailDraftApprovalHandler,
 ) {
   const display = resolveToolDisplay({ name: card.name, args: card.args });
   const detail = formatToolDetail(display);
@@ -722,6 +807,9 @@ export function renderExpandedToolCardContent(
         allowExternalEmbedUrls,
       })
     : nothing;
+  const mailDraftApprovalAction = onSendMailDraftApproval
+    ? resolveMailDraftApprovalAction(card)
+    : undefined;
 
   return html`
     <div class="chat-tool-card chat-tool-card--expanded ${isError ? "chat-tool-card--error" : ""}">
@@ -767,6 +855,24 @@ export function renderExpandedToolCardContent(
               text: card.outputText!,
               expanded: true,
             })
+        : nothing}
+      ${mailDraftApprovalAction
+        ? html`
+            <div class="chat-tool-card__mail-approval">
+              <button
+                class="chat-tool-card__mail-approval-btn"
+                type="button"
+                title="E-Mail senden freigeben"
+                @click=${(event: Event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  void onSendMailDraftApproval?.(mailDraftApprovalAction.confirmation);
+                }}
+              >
+                ${mailDraftApprovalAction.label}
+              </button>
+            </div>
+          `
         : nothing}
     </div>
   `;

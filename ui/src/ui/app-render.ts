@@ -3825,6 +3825,8 @@ export function renderApp(state: AppViewState) {
                   attachments: state.chatAttachments,
                   onAttachmentsChange: (next) => (state.chatAttachments = next),
                   onSend: () => void state.handleSendChat(),
+                  onSendMailDraftApproval: (confirmation) =>
+                    void state.handleSendChat(confirmation),
                   onCompact: () => void state.handleSendChat("/compact", { restoreDraft: true }),
                   onOpenSessionCheckpoints: () => {
                     state.sessionsExpandedCheckpointKey = state.sessionKey;

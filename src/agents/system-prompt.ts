@@ -562,6 +562,9 @@ function buildMessagingSection(params: {
                 ? `- Inline buttons not enabled for ${params.runtimeChannel}. If you need them, ask to set ${params.runtimeChannel}.capabilities.inlineButtons ("dm"|"group"|"all"|"allowlist").`
                 : ""
             : "",
+          params.inlineButtonsEnabled && params.availableTools.has("mail_create_draft")
+            ? "- When `mail_create_draft` returns `send_buttons`, send the visible draft receipt with `message(action=send)` and pass `send_buttons` unchanged as `buttons`; the button is the user's explicit send confirmation."
+            : "",
           ...(params.messageToolHints ?? []),
         ]
           .filter(Boolean)

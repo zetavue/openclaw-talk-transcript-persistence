@@ -10,6 +10,7 @@ const execFileAsync = promisify(execFile);
 
 export const MAIL_CREATE_DRAFT_TOOL_NAME = "mail_create_draft";
 const MAIL_CREATE_DRAFT_MARKER = "openclaw-local-structured-mail-create-draft-v1";
+const MAIL_CREATE_DRAFT_GROUNDING_GUARD_MARKER = "openclaw-local-mail-draft-grounding-guard-v1";
 
 type MailCreateDraftReceipt = {
   ok: boolean;
@@ -22,6 +23,14 @@ type MailCreateDraftReceipt = {
   draft_mailbox?: string;
   provider_draft_id?: string;
   approval?: string;
+  short_approval?: string;
+  send_buttons?: Array<
+    Array<{
+      text: string;
+      callback_data: string;
+      style: "success";
+    }>
+  >;
   recipient?: string;
   subject?: string;
   error?: string;
@@ -43,6 +52,7 @@ function parseCreateDraftOutput(stdout: string): MailCreateDraftReceipt {
   }
   const actionIdRaw = fields.get("action_id");
   const actionId = actionIdRaw ? Number(actionIdRaw) : undefined;
+  const shortApproval = fields.get("short_approval");
   return {
     ok: Number.isSafeInteger(actionId) && Number(actionId) > 0,
     ...(Number.isSafeInteger(actionId) && Number(actionId) > 0 ? { action_id: actionId } : {}),
@@ -56,6 +66,20 @@ function parseCreateDraftOutput(stdout: string): MailCreateDraftReceipt {
       ? { provider_draft_id: fields.get("provider_draft_id") }
       : {}),
     ...(fields.get("approval") ? { approval: fields.get("approval") } : {}),
+    ...(shortApproval ? { short_approval: shortApproval } : {}),
+    ...(Number.isSafeInteger(actionId) && Number(actionId) > 0 && shortApproval
+      ? {
+          send_buttons: [
+            [
+              {
+                text: "Senden freigeben",
+                callback_data: shortApproval,
+                style: "success" as const,
+              },
+            ],
+          ],
+        }
+      : {}),
   };
 }
 
@@ -80,6 +104,44 @@ function buildFailureReceipt(
   };
 }
 
+function normalizeMailDraftGuardText(value: string | undefined): string {
+  return (value ?? "").replace(/\s+/gu, " ").trim().toLowerCase();
+}
+
+function looksLikeExistingMailDraftRequest(params: {
+  subject?: string;
+  body?: string;
+  draftId?: string;
+}): boolean {
+  const subject = normalizeMailDraftGuardText(params.subject);
+  const body = normalizeMailDraftGuardText(params.body);
+  const draftId = normalizeMailDraftGuardText(params.draftId);
+  if (/^(re|aw|fwd|fw):/u.test(subject)) {
+    return true;
+  }
+  const joined = `${subject} ${body} ${draftId}`;
+  return /\b(antwort|reply|antwortentwurf|bestehende(?:n|r)? mail|existierende(?:n|r)? mail|alter entwurf|alten entwurf|alte e-mail|vorbereitete(?:n|r)? e-mail|gestern eine e-mail|entwurf anpassen|draft update|update draft|probearbeit-einladung)\b/u.test(
+    joined,
+  );
+}
+
+function isExplicitlyConfirmedRecipient(params: {
+  recipient?: string;
+  recipientSource?: string;
+  recipientConfirmation?: string;
+}): boolean {
+  const recipient = normalizeMailDraftGuardText(params.recipient);
+  const source = normalizeMailDraftGuardText(params.recipientSource);
+  const confirmation = normalizeMailDraftGuardText(params.recipientConfirmation);
+  if (!recipient || !confirmation) {
+    return false;
+  }
+  if (source !== "user_provided" && source !== "verified_source") {
+    return false;
+  }
+  return confirmation.includes(recipient);
+}
+
 export function createMailCreateDraftTool(options?: { mailWorkspaceDir?: string }): AnyAgentTool {
   const mailWorkspaceDir = options?.mailWorkspaceDir ?? defaultMailWorkspaceDir();
   return {
@@ -89,8 +151,12 @@ export function createMailCreateDraftTool(options?: { mailWorkspaceDir?: string 
     description: [
       "Structured Mail Layer tool for creating restaurant email drafts.",
       "Use this tool instead of exec/shell whenever a mail draft must be created.",
-      "Only report Action-ID, draft mailbox, and approval phrase from this tool's JSON receipt.",
+      "Only report Action-ID, draft mailbox, short_approval, and approval phrase from this tool's JSON receipt.",
+      "When the receipt includes send_buttons and the current channel supports inline buttons, send the visible draft receipt with message(action=send) and pass send_buttons unchanged as buttons; the send button is the user's explicit send confirmation.",
+      "For replies or updates to existing/prepared drafts, pass reply_source from the original exported INBOX message; the tool rejects ungrounded draft updates.",
+      "For standalone new outbound drafts without reply_source, pass recipient_source=user_provided or verified_source and recipient_confirmation containing the exact recipient address.",
       `Marker: ${MAIL_CREATE_DRAFT_MARKER}`,
+      `Grounding marker: ${MAIL_CREATE_DRAFT_GROUNDING_GUARD_MARKER}`,
     ].join(" "),
     parameters: Type.Object({
       account: Type.String({
@@ -112,6 +178,18 @@ export function createMailCreateDraftTool(options?: { mailWorkspaceDir?: string 
           description: "Path to exported source message when creating a reply draft.",
         }),
       ),
+      recipient_source: Type.Optional(
+        Type.Union([Type.Literal("user_provided"), Type.Literal("verified_source")], {
+          description:
+            "How the recipient was grounded for a standalone new outbound draft without reply_source.",
+        }),
+      ),
+      recipient_confirmation: Type.Optional(
+        Type.String({
+          description:
+            "Verbatim user statement or verified source excerpt containing the exact recipient address.",
+        }),
+      ),
       attachments: Type.Optional(
         Type.Array(
           Type.String({
@@ -122,6 +200,12 @@ export function createMailCreateDraftTool(options?: { mailWorkspaceDir?: string 
       message_uid: Type.Optional(Type.String({ description: "Source message UID." })),
       message_id: Type.Optional(Type.String({ description: "Source Message-ID." })),
       draft_id: Type.Optional(Type.String({ description: "Stable idempotent draft id." })),
+      grounding_required: Type.Optional(
+        Type.Boolean({
+          description:
+            "Set true when the user references an existing mail, old draft, screenshot, person, date, or prior prepared draft. Requires reply_source.",
+        }),
+      ),
       server_draft: Type.Optional(
         Type.Boolean({
           description: "Force creation/update in the IMAP Drafts folder.",
@@ -140,17 +224,33 @@ export function createMailCreateDraftTool(options?: { mailWorkspaceDir?: string 
       const subject = readStringParam(input, "subject", { required: true });
       const body = readStringParam(input, "body", { required: true, allowEmpty: false });
       const replySource = readStringParam(input, "reply_source");
+      const recipientSource = readStringParam(input, "recipient_source");
+      const recipientConfirmation = readStringParam(input, "recipient_confirmation");
       const attachments = readStringArrayParam(input, "attachments") ?? [];
       const messageUid = readStringParam(input, "message_uid");
       const messageId = readStringParam(input, "message_id");
       const draftId = readStringParam(input, "draft_id");
+      const groundingRequired = input.grounding_required === true;
       const serverDraft = input.server_draft === true;
       const localOnly = input.local_only === true;
+      const recipientExplicitlyConfirmed = isExplicitlyConfirmedRecipient({
+        recipient,
+        recipientSource,
+        recipientConfirmation,
+      });
+      if (recipient && !replySource && !recipientExplicitlyConfirmed) {
+        return jsonResult({
+          ok: false,
+          recipient,
+          subject,
+          error: `${MAIL_CREATE_DRAFT_GROUNDING_GUARD_MARKER}: recipient for new mail drafts must be confirmed from a reply_source, recipient_source=user_provided, or another verified source before creating a draft. recipient_confirmation must include the exact recipient address. Do not guess or infer recipient addresses from company names, images, websites, or general knowledge; ask the user to confirm the exact recipient address first.`,
+        });
+      }
       if (!recipient && !replySource) {
         return jsonResult({
           ok: false,
           subject,
-          error: "recipient required unless reply_source is provided",
+          error: `${MAIL_CREATE_DRAFT_GROUNDING_GUARD_MARKER}: recipient required unless reply_source is provided. Ask the user to confirm the exact recipient address before creating a new outbound draft.`,
         });
       }
       if (serverDraft && localOnly) {
@@ -159,6 +259,23 @@ export function createMailCreateDraftTool(options?: { mailWorkspaceDir?: string 
           recipient,
           subject,
           error: "server_draft and local_only cannot both be true",
+        });
+      }
+      if (
+        !replySource &&
+        !recipientExplicitlyConfirmed &&
+        (groundingRequired ||
+          looksLikeExistingMailDraftRequest({
+            subject,
+            body,
+            draftId,
+          }))
+      ) {
+        return jsonResult({
+          ok: false,
+          recipient,
+          subject,
+          error: `${MAIL_CREATE_DRAFT_GROUNDING_GUARD_MARKER}: reply_source required before creating or updating a draft that references an existing mail, old draft, person/date/screenshot, or prior prepared draft. Search INBOX/Entwürfe first and pass the exported original message path as reply_source, or ask the user to confirm the recipient explicitly.`,
         });
       }
 
@@ -199,14 +316,20 @@ export function createMailCreateDraftTool(options?: { mailWorkspaceDir?: string 
         if (localOnly) {
           args.push("--local-only");
         }
-        const { stdout } = await execFileAsync("python3", args, {
+        const execResult = await execFileAsync("python3", args, {
           cwd: mailWorkspaceDir,
           signal,
           timeout: 120_000,
           maxBuffer: 512 * 1024,
         });
+        const stdout =
+          typeof execResult === "string"
+            ? execResult
+            : typeof execResult.stdout === "string"
+              ? execResult.stdout
+              : execResult.stdout.toString("utf8");
         return jsonResult({
-          ...parseCreateDraftOutput(typeof stdout === "string" ? stdout : stdout.toString("utf8")),
+          ...parseCreateDraftOutput(stdout),
           recipient,
           subject,
         });

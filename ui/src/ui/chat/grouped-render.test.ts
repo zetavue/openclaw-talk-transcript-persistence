@@ -1130,6 +1130,51 @@ describe("grouped chat rendering", () => {
     ]);
   });
 
+  it("expands mail draft approval tool messages and routes button clicks", () => {
+    const container = document.createElement("div");
+    const onSendMailDraftApproval = vi.fn();
+    const message = {
+      id: "assistant-mail-draft",
+      role: "assistant",
+      toolCallId: "call-mail-draft",
+      content: [
+        {
+          type: "toolresult",
+          id: "call-mail-draft",
+          name: "mail_create_draft",
+          text: JSON.stringify({
+            ok: true,
+            action_id: 78,
+            short_approval: "Senden freigeben: Action 78",
+            send_buttons: [
+              [
+                {
+                  text: "Senden freigeben",
+                  callback_data: "Senden freigeben: Action 78",
+                  style: "success",
+                },
+              ],
+            ],
+          }),
+        },
+      ],
+      timestamp: Date.now(),
+    };
+
+    renderAssistantMessage(container, message, {
+      onSendMailDraftApproval,
+    });
+
+    const button = expectElement(
+      container,
+      ".chat-tool-card__mail-approval-btn",
+      HTMLButtonElement,
+    );
+    button.click();
+
+    expect(onSendMailDraftApproval).toHaveBeenCalledWith("Senden freigeben: Action 78");
+  });
+
   it("renders expanded standalone tool-call rows", () => {
     const container = document.createElement("div");
     const message = {

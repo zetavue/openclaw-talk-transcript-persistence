@@ -171,6 +171,7 @@ export type ChatProps = {
   onHistoryKeydown?: (input: ChatInputHistoryKeyInput) => ChatInputHistoryKeyResult;
   onSlashIntent?: () => void | Promise<void>;
   onSend: () => void;
+  onSendMailDraftApproval?: (confirmation: string) => void | Promise<void>;
   onCompact?: () => void | Promise<void>;
   onOpenSessionCheckpoints?: () => void | Promise<void>;
   onToggleRealtimeTalk?: () => void;
@@ -2281,6 +2282,7 @@ export function renderChat(props: ChatProps) {
                     isToolExpanded: (toolCardId: string) =>
                       expandedToolCards.get(toolCardId) ?? false,
                     onToggleToolExpanded: toggleToolCardExpanded,
+                    onSendMailDraftApproval: props.onSendMailDraftApproval,
                     onRequestUpdate: requestUpdate,
                     assistantName: props.assistantName,
                     assistantAvatar: assistantIdentity.avatar,

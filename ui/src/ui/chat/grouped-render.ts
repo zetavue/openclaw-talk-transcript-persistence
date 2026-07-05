@@ -31,11 +31,13 @@ import {
   formatCollapsedToolPreviewText,
   formatCollapsedToolSummaryText,
   isToolCardError,
+  type MailDraftApprovalHandler,
   renderExpandedToolCardContent,
   renderRawOutputToggle,
   renderToolCard,
   renderToolPreview,
   resolveCollapsedToolDetail,
+  resolveMailDraftApprovalAction,
 } from "./tool-cards.ts";
 
 type AssistantAttachmentAvailability =
@@ -420,6 +422,7 @@ type RenderMessageGroupOptions = {
   onToggleToolMessageExpanded?: (messageId: string, expanded?: boolean) => void;
   isToolExpanded?: (toolCardId: string) => boolean;
   onToggleToolExpanded?: (toolCardId: string) => void;
+  onSendMailDraftApproval?: MailDraftApprovalHandler;
   onRequestUpdate?: () => void;
   assistantName?: string;
   assistantAvatar?: string | null;
@@ -455,6 +458,7 @@ function buildGroupedMessageRenderOptions(
     onToggleToolMessageExpanded: opts.onToggleToolMessageExpanded,
     isToolExpanded: opts.isToolExpanded,
     onToggleToolExpanded: opts.onToggleToolExpanded,
+    onSendMailDraftApproval: opts.onSendMailDraftApproval,
     onRequestUpdate: opts.onRequestUpdate,
     canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
     basePath: opts.basePath,
@@ -519,8 +523,11 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
           ? toolLabels.join(", ")
           : `${toolLabels.slice(0, 2).join(", ")} +${toolLabels.length - 2} more`;
     const hasError = cards.some(isToolCardError);
+    const hasMailDraftApproval =
+      Boolean(opts.onSendMailDraftApproval) && cards.some(resolveMailDraftApprovalAction);
     const activityDisclosureId = `activity:${group.key}`;
-    const activityExpanded = opts.isToolMessageExpanded?.(activityDisclosureId) ?? hasError;
+    const activityExpanded =
+      opts.isToolMessageExpanded?.(activityDisclosureId) ?? (hasError || hasMailDraftApproval);
 
     return html`
       <div class="chat-group tool chat-group--activity">
@@ -1487,6 +1494,7 @@ function renderInlineToolCards(
     sessionKey?: string;
     agentId?: string;
     onOpenSidebar?: (content: SidebarContent) => void;
+    onSendMailDraftApproval?: MailDraftApprovalHandler;
     isToolExpanded?: (toolCardId: string) => boolean;
     onToggleToolExpanded?: (toolCardId: string) => void;
     canvasPluginSurfaceUrl?: string | null;
@@ -1498,13 +1506,16 @@ function renderInlineToolCards(
     <div class="chat-tools-inline">
       ${toolCards.map((card, index) =>
         renderToolCard(card, {
-          expanded: opts.isToolExpanded?.(`${opts.messageKey}:toolcard:${index}`) ?? false,
+          expanded:
+            opts.isToolExpanded?.(`${opts.messageKey}:toolcard:${index}`) ??
+            Boolean(opts.onSendMailDraftApproval && resolveMailDraftApprovalAction(card)),
           onToggleExpanded: opts.onToggleToolExpanded
             ? () => opts.onToggleToolExpanded?.(`${opts.messageKey}:toolcard:${index}`)
             : () => undefined,
           sessionKey: opts.sessionKey,
           agentId: opts.agentId,
           onOpenSidebar: opts.onOpenSidebar,
+          onSendMailDraftApproval: opts.onSendMailDraftApproval,
           canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
           embedSandboxMode: opts.embedSandboxMode ?? "scripts",
           allowExternalEmbedUrls: opts.allowExternalEmbedUrls ?? false,
@@ -1610,6 +1621,7 @@ function renderGroupedMessage(
     onToggleToolMessageExpanded?: (messageId: string, expanded?: boolean) => void;
     isToolExpanded?: (toolCardId: string) => boolean;
     onToggleToolExpanded?: (toolCardId: string) => void;
+    onSendMailDraftApproval?: MailDraftApprovalHandler;
     onRequestUpdate?: () => void;
     canvasPluginSurfaceUrl?: string | null;
     basePath?: string;
@@ -1712,8 +1724,11 @@ function renderGroupedMessage(
     return nothing;
   }
 
+  const hasMailDraftApproval =
+    Boolean(opts.onSendMailDraftApproval) && toolCards.some(resolveMailDraftApprovalAction);
   const toolMessageDisclosureId = `toolmsg:${messageKey}`;
-  const toolMessageExpanded = opts.isToolMessageExpanded?.(toolMessageDisclosureId) ?? false;
+  const toolMessageExpanded =
+    opts.isToolMessageExpanded?.(toolMessageDisclosureId) ?? hasMailDraftApproval;
   const toolNames = [...new Set(toolCards.map((c) => c.name))];
   const singleToolCard = toolCards.length === 1 ? toolCards[0] : null;
   const toolMessageHasError = toolCards.some(isToolCardError);
@@ -1843,12 +1858,14 @@ function renderGroupedMessage(
                               opts.canvasPluginSurfaceUrl,
                               opts.embedSandboxMode ?? "scripts",
                               opts.allowExternalEmbedUrls ?? false,
+                              opts.onSendMailDraftApproval,
                             )
                           : renderInlineToolCards(toolCards, {
                               messageKey,
                               sessionKey: opts.sessionKey,
                               agentId: opts.agentId,
                               onOpenSidebar,
+                              onSendMailDraftApproval: opts.onSendMailDraftApproval,
                               isToolExpanded: opts.isToolExpanded,
                               onToggleToolExpanded: opts.onToggleToolExpanded,
                               canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
@@ -1903,6 +1920,7 @@ function renderGroupedMessage(
                   sessionKey: opts.sessionKey,
                   agentId: opts.agentId,
                   onOpenSidebar,
+                  onSendMailDraftApproval: opts.onSendMailDraftApproval,
                   isToolExpanded: opts.isToolExpanded,
                   onToggleToolExpanded: opts.onToggleToolExpanded,
                   canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
