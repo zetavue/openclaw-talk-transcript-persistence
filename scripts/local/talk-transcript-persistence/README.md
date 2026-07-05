@@ -32,12 +32,18 @@ Git-managed local OpenClaw source tree when source-level local fixes are missing
 - Reply session init conflict retry: source-backed limited backoff for transient
   `reply session initialization conflicted` races, so WebUI observation does not
   immediately abort Telegram replay processing.
+- Cron Telegram delivery validation: source-backed fail-fast checks that reject
+  phone-number Telegram targets and missing/default bot accounts before cron jobs
+  are created or updated.
 - Mail action claim guard: source-backed runtime guard that blocks unverified
   `Action-ID` success claims before they reach Telegram, including the live/block
   streaming path.
 - Structured mail draft creation for all agents: source-backed checks that keep
   the `mail_create_draft` Mail Layer tool and the global `exec/bash` block for
   direct `create_draft.py` calls after package updates.
+- Mail draft grounding guard: source-backed check that rejects draft creation
+  for replies or old/prepared draft updates unless the original exported message
+  is passed as `reply_source`.
 
 ## Files
 
@@ -76,9 +82,11 @@ openclaw-talk-transcript-guard: PASS: telegram-visible-reply-dedupe markers alre
 openclaw-talk-transcript-guard: PASS: voice-command-guard markers already present
 openclaw-talk-transcript-guard: PASS: mail-action-claim-guard markers already present
 openclaw-talk-transcript-guard: PASS: structured-mail-create-draft-tool markers already present
+openclaw-talk-transcript-guard: PASS: mail-draft-grounding-guard markers already present
 openclaw-talk-transcript-guard: PASS: mail-draft-exec-block markers already present
 openclaw-talk-transcript-guard: PASS: telegram-ingress-watchdog markers already present
 openclaw-talk-transcript-guard: PASS: reply-session-init-conflict-retry markers already present
+openclaw-talk-transcript-guard: PASS: cron-telegram-delivery-validation markers already present
 ```
 
 ## Environment Overrides

@@ -83,6 +83,11 @@ STRUCTURED_MAIL_CREATE_DRAFT_TOOL_MARKERS = (
     "openclaw-local-structured-mail-create-draft-v1",
     "mail_create_draft",
 )
+MAIL_DRAFT_GROUNDING_GUARD_MARKERS = (
+    "openclaw-local-mail-draft-grounding-guard-v1",
+    "grounding_required",
+    "looksLikeExistingMailDraftRequest",
+)
 MAIL_DRAFT_EXEC_BLOCK_MARKERS = (
     "openclaw-local-mail-draft-exec-block-v1",
     "Direct create_draft.py via exec/bash is blocked",
@@ -95,6 +100,11 @@ TELEGRAM_INGRESS_WATCHDOG_MARKERS = (
 REPLY_SESSION_INIT_CONFLICT_RETRY_MARKERS = (
     "openclaw-local-reply-session-init-conflict-retry-v1",
     "REPLY_SESSION_INIT_CONFLICT_RETRY_DELAYS_MS",
+)
+CRON_TELEGRAM_DELIVERY_VALIDATION_MARKERS = (
+    "openclaw-local-cron-telegram-delivery-validation-v1",
+    "resolveTelegramCronDeliveryAccountToken",
+    "stripTelegramCronTargetPrefix",
 )
 source_dist_rebuilt = False
 
@@ -759,6 +769,16 @@ def main() -> int:
         lambda text: text,
         "structured-mail-create-draft-tool",
     )
+    mail_draft_grounding_guard_bundle = find_source_backed_dist_bundle(
+        "mail-draft-grounding-guard",
+        MAIL_DRAFT_GROUNDING_GUARD_MARKERS,
+    )
+    patch_bundle(
+        mail_draft_grounding_guard_bundle,
+        MAIL_DRAFT_GROUNDING_GUARD_MARKERS,
+        lambda text: text,
+        "mail-draft-grounding-guard",
+    )
     mail_draft_exec_block_bundle = find_source_backed_dist_bundle(
         "mail-draft-exec-block",
         MAIL_DRAFT_EXEC_BLOCK_MARKERS,
@@ -788,6 +808,16 @@ def main() -> int:
         REPLY_SESSION_INIT_CONFLICT_RETRY_MARKERS,
         lambda text: text,
         "reply-session-init-conflict-retry",
+    )
+    cron_telegram_delivery_validation_bundle = find_source_backed_dist_bundle(
+        "cron-telegram-delivery-validation",
+        CRON_TELEGRAM_DELIVERY_VALIDATION_MARKERS,
+    )
+    patch_bundle(
+        cron_telegram_delivery_validation_bundle,
+        CRON_TELEGRAM_DELIVERY_VALIDATION_MARKERS,
+        lambda text: text,
+        "cron-telegram-delivery-validation",
     )
     return 0
 

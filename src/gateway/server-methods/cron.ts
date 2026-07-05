@@ -154,6 +154,118 @@ function assertCompatibleAnnounceTarget(params: {
   }
 }
 
+const OPENCLAW_LOCAL_CRON_TELEGRAM_DELIVERY_VALIDATION_MARKER =
+  "openclaw-local-cron-telegram-delivery-validation-v1";
+
+function resolveTelegramCronDeliveryAccountToken(params: {
+  cfg: OpenClawConfig;
+  accountId?: string;
+}): boolean {
+  const telegram = params.cfg.channels?.telegram;
+  if (!telegram || typeof telegram !== "object" || Array.isArray(telegram)) {
+    return false;
+  }
+  const accountId = params.accountId?.trim();
+  if (!accountId || accountId === "default") {
+    const topLevelToken = (telegram as { botToken?: unknown; tokenFile?: unknown }).botToken;
+    const topLevelTokenFile = (telegram as { botToken?: unknown; tokenFile?: unknown }).tokenFile;
+    if (
+      (typeof topLevelToken === "string" && topLevelToken.trim()) ||
+      (typeof topLevelTokenFile === "string" && topLevelTokenFile.trim()) ||
+      (topLevelToken && typeof topLevelToken === "object") ||
+      (topLevelTokenFile && typeof topLevelTokenFile === "object")
+    ) {
+      return true;
+    }
+    const accounts = (telegram as { accounts?: unknown }).accounts;
+    if (!accounts || typeof accounts !== "object" || Array.isArray(accounts)) {
+      return false;
+    }
+    const defaultAccount = (accounts as Record<string, unknown>).default;
+    if (!defaultAccount || typeof defaultAccount !== "object" || Array.isArray(defaultAccount)) {
+      return false;
+    }
+    const token = (defaultAccount as { botToken?: unknown; tokenFile?: unknown }).botToken;
+    const tokenFile = (defaultAccount as { botToken?: unknown; tokenFile?: unknown }).tokenFile;
+    return Boolean(
+      (typeof token === "string" && token.trim()) ||
+      (typeof tokenFile === "string" && tokenFile.trim()) ||
+      (token && typeof token === "object") ||
+      (tokenFile && typeof tokenFile === "object"),
+    );
+  }
+  const accounts = (telegram as { accounts?: unknown }).accounts;
+  if (!accounts || typeof accounts !== "object" || Array.isArray(accounts)) {
+    return false;
+  }
+  const account = (accounts as Record<string, unknown>)[accountId];
+  if (!account || typeof account !== "object" || Array.isArray(account)) {
+    return false;
+  }
+  const token = (account as { botToken?: unknown; tokenFile?: unknown }).botToken;
+  const tokenFile = (account as { botToken?: unknown; tokenFile?: unknown }).tokenFile;
+  return Boolean(
+    (typeof token === "string" && token.trim()) ||
+    (typeof tokenFile === "string" && tokenFile.trim()) ||
+    (token && typeof token === "object") ||
+    (tokenFile && typeof tokenFile === "object"),
+  );
+}
+
+function stripTelegramCronTargetPrefix(to: string): string {
+  let value = to.trim();
+  while (true) {
+    const next = value
+      .replace(/^(telegram|tg):/iu, "")
+      .replace(/^group:/iu, "")
+      .trim();
+    if (next === value) {
+      return value;
+    }
+    value = next;
+  }
+}
+
+function assertValidTelegramCronTarget(params: {
+  cfg: OpenClawConfig;
+  delivery?: {
+    channel?: string;
+    to?: string;
+    accountId?: string;
+  };
+  field: "delivery" | "delivery.failureDestination";
+}) {
+  const delivery = params.delivery;
+  const channel =
+    delivery?.channel && delivery.channel !== "last"
+      ? delivery.channel
+      : (resolveTargetPrefixedChannel(delivery?.to) ?? delivery?.channel);
+  if (!delivery || channel !== "telegram") {
+    return;
+  }
+  if (
+    !resolveTelegramCronDeliveryAccountToken({ cfg: params.cfg, accountId: delivery.accountId })
+  ) {
+    const accountId = delivery.accountId?.trim() || "default";
+    throw new Error(
+      `${OPENCLAW_LOCAL_CRON_TELEGRAM_DELIVERY_VALIDATION_MARKER}: ${params.field}.accountId references Telegram account "${accountId}", but that account has no bot token configured`,
+    );
+  }
+  const to = delivery.to?.trim();
+  if (!to) {
+    return;
+  }
+  const stripped = stripTelegramCronTargetPrefix(to);
+  if (/^\+\d[\d\s().-]*$/u.test(stripped)) {
+    throw new Error(`${params.field}.to must be a numeric Telegram chat ID, not a phone number`);
+  }
+  if (!/^-?\d+(?::(?:topic:)?\d+)?$/u.test(stripped)) {
+    throw new Error(
+      `${params.field}.to must be a numeric Telegram chat ID, optionally suffixed with :topic:<id>`,
+    );
+  }
+}
+
 async function assertValidCronAnnounceDelivery(params: {
   cfg: OpenClawConfig;
   delivery?: CronDelivery;
@@ -171,6 +283,11 @@ async function assertValidCronAnnounceDelivery(params: {
         to: params.delivery.to,
       }),
       field: "delivery.channel",
+    });
+    assertValidTelegramCronTarget({
+      cfg: params.cfg,
+      delivery: params.delivery,
+      field: "delivery",
     });
   }
 
@@ -196,6 +313,11 @@ async function assertValidCronAnnounceDelivery(params: {
         to: failureDestination.to,
       }),
       field: "delivery.failureDestination.channel",
+    });
+    assertValidTelegramCronTarget({
+      cfg: params.cfg,
+      delivery: failureDestination,
+      field: "delivery.failureDestination",
     });
   }
 }
