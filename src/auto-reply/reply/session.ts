@@ -89,11 +89,35 @@ const log = createSubsystemLogger("session-init");
 const REPLY_SESSION_INIT_CONFLICT_RETRY_MARKER =
   "openclaw-local-reply-session-init-conflict-retry-v1";
 const REPLY_SESSION_INIT_CONFLICT_RETRY_DELAYS_MS = [250, 750, 1500, 3000, 5000, 8000] as const;
+const replySessionInitializationLocks = new Map<string, Promise<void>>();
 
 function sleepReplySessionInitConflictRetry(delayMs: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, delayMs);
   });
+}
+
+async function withReplySessionInitializationLock<T>(
+  lockKey: string,
+  run: () => Promise<T>,
+): Promise<T> {
+  const previous = replySessionInitializationLocks.get(lockKey) ?? Promise.resolve();
+  let releaseCurrent!: () => void;
+  const current = new Promise<void>((resolve) => {
+    releaseCurrent = resolve;
+  });
+  const queued = previous.catch(() => undefined).then(() => current);
+  replySessionInitializationLocks.set(lockKey, queued);
+
+  await previous.catch(() => undefined);
+  try {
+    return await run();
+  } finally {
+    releaseCurrent();
+    if (replySessionInitializationLocks.get(lockKey) === queued) {
+      replySessionInitializationLocks.delete(lockKey);
+    }
+  }
 }
 
 function stripThreadFromSessionRoute(route: SessionEntry["route"]): SessionEntry["route"] {
@@ -830,42 +854,46 @@ async function initSessionStateAttempt(
     sessionEntry.skillsSnapshot = undefined;
   }
   // Archive old transcript so it doesn't accumulate on disk (#14869).
-  const committed = await commitReplySessionInitialization({
-    activeSessionKey: sessionKey,
-    agentId,
-    expectedRevision: initializationSnapshot.revision,
-    fallbackSessionFile,
-    maintenanceConfig,
-    onArchiveError: (error, sourcePath) => {
-      log.warn(
-        `failed to archive previous session transcript ${sourcePath} for session ${previousSessionEntry?.sessionId}`,
-        { error: String(error) },
-      );
-    },
-    onMaintenanceWarning: (warning) =>
-      deliverSessionMaintenanceWarning({
-        cfg,
-        sessionKey,
-        entry: sessionEntry,
-        warning,
-      }),
-    prepareSessionEntry: async ({ readEntry, sessionEntry: entryToCommit }) =>
-      await prepareReplySessionParentFork({
+  const committed = await withReplySessionInitializationLock(
+    `${storePath}\0${sessionKey}`,
+    async () =>
+      await commitReplySessionInitialization({
+        activeSessionKey: sessionKey,
         agentId,
-        alreadyForked,
-        parentSessionKey,
-        readEntry,
-        sessionEntry: entryToCommit,
+        expectedRevision: initializationSnapshot.revision,
+        fallbackSessionFile,
+        maintenanceConfig,
+        onArchiveError: (error, sourcePath) => {
+          log.warn(
+            `failed to archive previous session transcript ${sourcePath} for session ${previousSessionEntry?.sessionId}`,
+            { error: String(error) },
+          );
+        },
+        onMaintenanceWarning: (warning) =>
+          deliverSessionMaintenanceWarning({
+            cfg,
+            sessionKey,
+            entry: sessionEntry,
+            warning,
+          }),
+        prepareSessionEntry: async ({ readEntry, sessionEntry: entryToCommit }) =>
+          await prepareReplySessionParentFork({
+            agentId,
+            alreadyForked,
+            parentSessionKey,
+            readEntry,
+            sessionEntry: entryToCommit,
+            sessionKey,
+            storePath,
+            warn: (message) => log.warn(message),
+          }),
+        previousEntry: previousSessionEntry,
+        retiredEntry: retiredLegacyMainDelivery,
+        sessionEntry,
         sessionKey,
         storePath,
-        warn: (message) => log.warn(message),
       }),
-    previousEntry: previousSessionEntry,
-    retiredEntry: retiredLegacyMainDelivery,
-    sessionEntry,
-    sessionKey,
-    storePath,
-  });
+  );
   if (!committed.ok) {
     if (!staleSnapshotRetried) {
       return await initSessionStateAttempt(params, true, conflictRetryIndex);

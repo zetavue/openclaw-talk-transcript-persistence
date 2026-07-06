@@ -86,4 +86,81 @@ describe("initSessionState conflict recovery", () => {
       await fs.rm(root, { recursive: true, force: true });
     }
   });
+
+  it("serializes concurrent initialization for the same reply session key", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-init-queue-"));
+    let releaseFirstCommit: (() => void) | undefined;
+    try {
+      const storePath = path.join(root, "sessions.json");
+      const cfg = { session: { store: storePath } } as OpenClawConfig;
+      const firstCommitStarted = new Promise<void>((resolve) => {
+        sessionAccessorMocks.commitReplySessionInitialization.mockImplementation(
+          async ({
+            sessionEntry,
+            sessionKey,
+          }: {
+            sessionEntry: SessionEntry;
+            sessionKey: string;
+          }) => {
+            const callIndex =
+              sessionAccessorMocks.commitReplySessionInitialization.mock.calls.length;
+            if (callIndex === 1) {
+              resolve();
+              await new Promise<void>((release) => {
+                releaseFirstCommit = release;
+              });
+            }
+            const committedEntry = {
+              ...sessionEntry,
+              sessionFile: path.join(root, `${sessionEntry.sessionId}.jsonl`),
+            };
+            return {
+              ok: true,
+              sessionEntry: committedEntry,
+              sessionStoreView: { [sessionKey]: committedEntry },
+              previousSessionTranscript: {},
+            };
+          },
+        );
+      });
+      sessionAccessorMocks.loadReplySessionInitializationSnapshot.mockImplementation(() => ({
+        currentEntry: undefined,
+        readEntry: () => undefined,
+        revision: "stable",
+      }));
+
+      const first = initSessionState({
+        cfg,
+        commandAuthorized: true,
+        ctx: {
+          Body: "first",
+          ChatType: "direct",
+          Provider: "telegram",
+          SessionKey: "agent:test:telegram:direct:1944659960",
+        },
+      });
+      await firstCommitStarted;
+
+      const second = initSessionState({
+        cfg,
+        commandAuthorized: true,
+        ctx: {
+          Body: "second",
+          ChatType: "direct",
+          Provider: "telegram",
+          SessionKey: "agent:test:telegram:direct:1944659960",
+        },
+      });
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(sessionAccessorMocks.commitReplySessionInitialization).toHaveBeenCalledTimes(1);
+      releaseFirstCommit?.();
+
+      await Promise.all([first, second]);
+      expect(sessionAccessorMocks.commitReplySessionInitialization).toHaveBeenCalledTimes(2);
+    } finally {
+      releaseFirstCommit?.();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
 });
