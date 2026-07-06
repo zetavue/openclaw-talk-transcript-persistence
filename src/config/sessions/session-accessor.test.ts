@@ -446,6 +446,45 @@ describe("session accessor file-backed seam", () => {
     });
   });
 
+  it("allows reply session initialization when only transcript activity metadata changed", async () => {
+    const sessionKey = "agent:main:main";
+    await upsertSessionEntry(
+      { sessionKey, storePath },
+      {
+        sessionFile: transcriptPath,
+        sessionId: "existing-session",
+        updatedAt: 10,
+      },
+    );
+
+    const snapshot = loadReplySessionInitializationSnapshot({ sessionKey, storePath });
+    await updateSessionEntry({ sessionKey, storePath }, () => ({ updatedAt: 20 }));
+
+    const committed = await commitReplySessionInitialization({
+      activeSessionKey: sessionKey,
+      agentId: "main",
+      expectedRevision: snapshot.revision,
+      previousEntry: snapshot.currentEntry,
+      sessionEntry: {
+        ...snapshot.currentEntry,
+        sessionFile: snapshot.currentEntry?.sessionFile,
+        sessionId: "existing-session",
+        updatedAt: 30,
+      },
+      sessionKey,
+      storePath,
+    });
+
+    expect(committed.ok).toBe(true);
+    if (!committed.ok) {
+      throw new Error("expected reply session initialization to commit");
+    }
+    expect(committed.sessionEntry).toMatchObject({
+      sessionId: "existing-session",
+      updatedAt: 30,
+    });
+  });
+
   it("can borrow cached entry objects for read-only hot paths", async () => {
     const scope = {
       clone: false,

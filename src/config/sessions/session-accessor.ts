@@ -973,7 +973,14 @@ function cloneSessionEntries(store: Record<string, SessionEntry>): Record<string
 }
 
 function createReplySessionInitializationRevision(entry: SessionEntry | undefined): string {
-  return JSON.stringify(entry ?? null);
+  if (!entry) {
+    return "null";
+  }
+  const stableEntry: Partial<SessionEntry> = { ...entry };
+  // Transcript appends touch updatedAt independently of reply-session
+  // initialization. Treat it as activity metadata, not an identity conflict.
+  delete stableEntry.updatedAt;
+  return JSON.stringify(stableEntry);
 }
 
 function resolveInitializedReplySessionEntry(params: {
