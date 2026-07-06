@@ -527,6 +527,58 @@ describe("withReplyDispatcher", () => {
     });
   });
 
+  it("adds webchat approval buttons to mail approval source replies", async () => {
+    hoisted.getGlobalHookRunnerMock.mockReturnValue({
+      hasHooks: vi.fn(() => false),
+    });
+    hoisted.createReplyDispatcherMock.mockReturnValueOnce(createDispatcher([]));
+    hoisted.dispatchReplyFromConfigMock.mockResolvedValueOnce({ text: "ok" });
+
+    await dispatchInboundMessageWithDispatcher({
+      ctx: buildTestCtx({
+        Surface: "webchat",
+        SessionKey: "agent:restaurant:dashboard:5e9346d6-1a57-437c-be75-c22f8216c5ab",
+      }),
+      cfg: {} as OpenClawConfig,
+      dispatcherOptions: {
+        deliver: async () => undefined,
+      },
+      replyOptions: { runId: "run-mail-approval-webchat" },
+      replyResolver: async () => ({ text: "ok" }),
+    });
+
+    const dispatcherOptions = requireReplyDispatcherOptions();
+    if (!dispatcherOptions?.beforeDeliver) {
+      throw new Error("expected beforeDeliver hook");
+    }
+
+    const payload = await dispatcherOptions.beforeDeliver(
+      {
+        text:
+          "**Send-Aktion registriert.**\n\n" +
+          "Der Draft (UID 8525) wurde als versandbereit markiert.\n\n" +
+          "**Action ID:** 125\n\n" +
+          "- `Senden freigeben: Action 125`",
+      },
+      { kind: "final" },
+    );
+
+    expect(payload.presentation).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Senden freigeben",
+              value: "Senden freigeben: Action 125",
+              style: "success",
+            },
+          ],
+        },
+      ],
+    });
+  });
+
   it("correlates reply_payload_sending usageState with the generated run id", async () => {
     const usageState = { provider: "openai", model: "gpt-5.5" };
     const runReplyPayloadSending = vi.fn(async ({ payload }: { payload: { text?: string } }) => ({

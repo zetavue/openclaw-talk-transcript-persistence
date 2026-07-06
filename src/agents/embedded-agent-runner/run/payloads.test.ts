@@ -214,6 +214,40 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
   });
 
+  it("adds a webchat approval presentation to mail draft final replies", () => {
+    const text = [
+      "**Send-Aktion registriert.**",
+      "",
+      "Der Draft (UID 8525) wurde als versandbereit markiert.",
+      "",
+      "**Action ID:** 125",
+      "",
+      "- `Senden freigeben: Action 125`",
+    ].join("\n");
+
+    const payloads = buildPayloads({
+      agentId: "restaurant",
+      sessionKey: "agent:restaurant:webchat:5e9346d6-1a57-437c-be75-c22f8216c5ab",
+      assistantTexts: [text],
+    });
+
+    expectSinglePayloadText(payloads, text);
+    expect(payloads[0]?.presentation).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Senden freigeben",
+              value: "Senden freigeben: Action 125",
+              style: "success",
+            },
+          ],
+        },
+      ],
+    });
+  });
+
   it("does not add mail approval presentations outside supported final reply paths", () => {
     const text = "Short approval: Senden freigeben: Action 112";
 

@@ -85,7 +85,11 @@ const MAIL_APPROVAL_PATTERN = /\bSenden freigeben:\s*Action\s+(\d+)\b/u;
 
 function isMailApprovalPresentationSessionKey(sessionKey: string): boolean {
   const normalized = sessionKey.toLowerCase();
-  return normalized.includes("telegram") || normalized.includes("dashboard");
+  return (
+    normalized.includes("telegram") ||
+    normalized.includes("dashboard") ||
+    normalized.includes("webchat")
+  );
 }
 
 function buildMailApprovalPresentation(params: {

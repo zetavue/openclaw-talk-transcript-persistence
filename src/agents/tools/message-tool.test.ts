@@ -1278,6 +1278,37 @@ describe("message tool agent routing", () => {
     });
   });
 
+  it("adds mail approval presentations on webchat source replies", async () => {
+    mockSendResult({ channel: "webchat", to: "webchat:5e9346d6" });
+
+    const input = await executeSend({
+      action: {
+        message:
+          "Send-Aktion registriert.\n\n" + "Action ID: 125\n" + "Senden freigeben: Action 125",
+      },
+      toolOptions: {
+        agentId: "restaurant",
+        currentChannelProvider: "webchat",
+        currentMessagingTarget: "webchat:5e9346d6",
+      },
+    });
+
+    expect(input?.params?.presentation).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Senden freigeben",
+              value: "Senden freigeben: Action 125",
+              style: "success",
+            },
+          ],
+        },
+      ],
+    });
+  });
+
   it("derives agentId from the session key", async () => {
     mockSendResult();
 

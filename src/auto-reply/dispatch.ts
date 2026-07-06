@@ -387,7 +387,7 @@ function isMailApprovalPresentationSourceReply(finalized: FinalizedMsgContext): 
   const channel = String(finalized.Surface ?? finalized.Provider ?? "")
     .trim()
     .toLowerCase();
-  return channel === "telegram" || channel === "dashboard";
+  return channel === "telegram" || channel === "dashboard" || channel === "webchat";
 }
 
 function buildMailApprovalBeforeDeliver(

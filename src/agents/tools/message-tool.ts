@@ -396,6 +396,7 @@ function hasSanitizedSendPayloadContent(params: Record<string, unknown>): boolea
 
 const MAIL_APPROVAL_PATTERN = /\bSenden freigeben:\s*Action\s+(\d+)\b/u;
 const MAIL_MESSAGE_PARAM_KEYS = ["message", "text", "content", "caption", "SendMessage"] as const;
+const MAIL_APPROVAL_PRESENTATION_CHANNELS = new Set(["telegram", "dashboard", "webchat"]);
 
 type MailActionReceipt = {
   id: number;
@@ -408,6 +409,10 @@ type MailActionReceipt = {
 };
 
 type LookupMailActionReceipt = (actionId: number) => Promise<MailActionReceipt | null | undefined>;
+
+function isMailApprovalPresentationChannel(channel: string | undefined): boolean {
+  return channel ? MAIL_APPROVAL_PRESENTATION_CHANNELS.has(channel) : false;
+}
 
 function defaultMailActionDbPath(): string {
   const openclawHome = process.env.OPENCLAW_HOME?.trim() || path.join(os.homedir(), ".openclaw");
@@ -533,7 +538,7 @@ async function maybeAddMailApprovalPresentation(
       normalizeOptionalString(params.provider) ??
       options.currentChannelProvider,
   );
-  if (channel !== "telegram") {
+  if (!isMailApprovalPresentationChannel(channel)) {
     return;
   }
   const messageParam = readFirstStringParamEntry(params, MAIL_MESSAGE_PARAM_KEYS);
