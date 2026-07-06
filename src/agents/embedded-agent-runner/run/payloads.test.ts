@@ -188,12 +188,38 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
   });
 
-  it("does not add mail approval presentations outside Telegram final reply paths", () => {
+  it("adds a dashboard approval presentation to mail draft final replies", () => {
+    const text = "Short approval: Senden freigeben: Action 112";
+
+    const payloads = buildPayloads({
+      agentId: "test",
+      sessionKey: "agent:test:dashboard:28a12a83-2530-4c5a-8a16-e0e93cfccf3c",
+      assistantTexts: [text],
+    });
+
+    expectSinglePayloadText(payloads, text);
+    expect(payloads[0]?.presentation).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Senden freigeben",
+              value: "Senden freigeben: Action 112",
+              style: "success",
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("does not add mail approval presentations outside supported final reply paths", () => {
     const text = "Short approval: Senden freigeben: Action 112";
 
     const payloads = buildPayloads({
       agentId: "restaurant",
-      sessionKey: "agent:restaurant:dashboard:session",
+      sessionKey: "agent:restaurant:discord:session",
       assistantTexts: [text],
     });
 

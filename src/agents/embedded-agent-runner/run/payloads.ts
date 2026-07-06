@@ -83,8 +83,9 @@ const DID_NOT_FAIL_PATTERN = /\b(?:did not|didn't)\s+fail\b/u;
 const NEGATED_FAILURE_PATTERN = /\b(?:no|not|without)\s+(?:failures?|errors?)\b/u;
 const MAIL_APPROVAL_PATTERN = /\bSenden freigeben:\s*Action\s+(\d+)\b/u;
 
-function isTelegramSessionKey(sessionKey: string): boolean {
-  return sessionKey.toLowerCase().includes("telegram");
+function isMailApprovalPresentationSessionKey(sessionKey: string): boolean {
+  const normalized = sessionKey.toLowerCase();
+  return normalized.includes("telegram") || normalized.includes("dashboard");
 }
 
 function buildMailApprovalPresentation(params: {
@@ -93,7 +94,7 @@ function buildMailApprovalPresentation(params: {
   text?: string;
   existingPresentation?: ReplyPayload["presentation"];
 }): ReplyPayload["presentation"] | undefined {
-  if (params.existingPresentation || !isTelegramSessionKey(params.sessionKey)) {
+  if (params.existingPresentation || !isMailApprovalPresentationSessionKey(params.sessionKey)) {
     return undefined;
   }
   const actionMatch = params.text ? MAIL_APPROVAL_PATTERN.exec(params.text) : null;

@@ -383,18 +383,18 @@ function buildReplyPayloadSendingBeforeDeliver(
 
 const MAIL_APPROVAL_PATTERN = /\bSenden freigeben:\s*Action\s+(\d+)\b/u;
 
-function isTelegramSourceReply(finalized: FinalizedMsgContext): boolean {
+function isMailApprovalPresentationSourceReply(finalized: FinalizedMsgContext): boolean {
   const channel = String(finalized.Surface ?? finalized.Provider ?? "")
     .trim()
     .toLowerCase();
-  return channel === "telegram";
+  return channel === "telegram" || channel === "dashboard";
 }
 
 function buildMailApprovalBeforeDeliver(
   ctx: MsgContext | FinalizedMsgContext,
 ): ReplyDispatchBeforeDeliver | undefined {
   const finalized = finalizeInboundContext(ctx);
-  if (!isTelegramSourceReply(finalized)) {
+  if (!isMailApprovalPresentationSourceReply(finalized)) {
     return undefined;
   }
   return (payload) => {
