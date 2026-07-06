@@ -97,4 +97,22 @@ describe("mail_create_draft recipient grounding", () => {
       "recipient_confirmation must include the exact recipient address",
     );
   });
+
+  it("returns the reply-source guard for reply drafts before the generic recipient guard", async () => {
+    const tool = createMailCreateDraftTool({ mailWorkspaceDir: "/tmp/mail" });
+
+    const result = await tool.execute("call-mail-draft", {
+      account: "restaurant",
+      to: "itskuhlmann@web.de",
+      subject: "Re: Hessecup am 15.07",
+      body: "Danke Peter fuer die Rueckmeldung.",
+      grounding_required: true,
+    });
+
+    const details = resultDetails(result.details);
+    expect(execFile).not.toHaveBeenCalled();
+    expect(details.ok).toBe(false);
+    expect(String(details.error)).toContain("reply_source required");
+    expect(String(details.error)).not.toContain("recipient for new mail drafts");
+  });
 });

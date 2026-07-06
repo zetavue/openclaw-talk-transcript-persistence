@@ -238,6 +238,21 @@ export function createMailCreateDraftTool(options?: { mailWorkspaceDir?: string 
         recipientSource,
         recipientConfirmation,
       });
+      const existingMailDraftRequest =
+        groundingRequired ||
+        looksLikeExistingMailDraftRequest({
+          subject,
+          body,
+          draftId,
+        });
+      if (!replySource && !recipientExplicitlyConfirmed && existingMailDraftRequest) {
+        return jsonResult({
+          ok: false,
+          recipient,
+          subject,
+          error: `${MAIL_CREATE_DRAFT_GROUNDING_GUARD_MARKER}: reply_source required before creating or updating a draft that references an existing mail, old draft, person/date/screenshot, or prior prepared draft. Search INBOX/Entwürfe first and pass the exported original message path as reply_source. If an IMAP/tool result already verified the exact address but no exported source path is available, retry with recipient_source=verified_source and recipient_confirmation containing the exact recipient address.`,
+        });
+      }
       if (recipient && !replySource && !recipientExplicitlyConfirmed) {
         return jsonResult({
           ok: false,
@@ -259,23 +274,6 @@ export function createMailCreateDraftTool(options?: { mailWorkspaceDir?: string 
           recipient,
           subject,
           error: "server_draft and local_only cannot both be true",
-        });
-      }
-      if (
-        !replySource &&
-        !recipientExplicitlyConfirmed &&
-        (groundingRequired ||
-          looksLikeExistingMailDraftRequest({
-            subject,
-            body,
-            draftId,
-          }))
-      ) {
-        return jsonResult({
-          ok: false,
-          recipient,
-          subject,
-          error: `${MAIL_CREATE_DRAFT_GROUNDING_GUARD_MARKER}: reply_source required before creating or updating a draft that references an existing mail, old draft, person/date/screenshot, or prior prepared draft. Search INBOX/Entwürfe first and pass the exported original message path as reply_source, or ask the user to confirm the recipient explicitly.`,
         });
       }
 
