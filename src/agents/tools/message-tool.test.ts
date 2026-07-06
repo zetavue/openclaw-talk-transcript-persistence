@@ -1134,6 +1134,69 @@ describe("message tool agent routing", () => {
     });
   });
 
+  it("replaces summarized test-agent Telegram mail draft receipts with the full stored body", async () => {
+    mockSendResult({ channel: "telegram", to: "telegram:1944659960" });
+
+    const fullBody =
+      'A scarecrow walks into a bar and says, "Drinks are on me. I am outstanding in my field."';
+
+    const input = await executeSend({
+      action: {
+        message:
+          "New draft reply (longer joke) to last email created.\n\n" +
+          "Action ID: 117\n" +
+          "Subject: Re: Test\n" +
+          "Body: [scarecrow + duck bartender joke]\n\n" +
+          "server_draft: true (Entwürfe, provider_draft_id=9)\n" +
+          "Approval: Senden freigeben: Action 117",
+        presentation: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [
+                {
+                  label: "Senden freigeben",
+                  value: "Senden freigeben: Action 117",
+                  style: "success",
+                },
+              ],
+            },
+          ],
+        },
+      },
+      toolOptions: {
+        agentId: "test",
+        currentChannelProvider: "telegram",
+        currentMessagingTarget: "telegram:1944659960",
+        lookupTestAgentMailActionReceipt: async () => ({
+          id: 117,
+          recipient: "cistamea@outlook.com",
+          subject: "Re: Test",
+          bodyText: fullBody,
+          draftMailbox: "Entwürfe",
+          providerDraftId: "9",
+        }),
+      } as never,
+    });
+
+    expect(input?.params?.message).toContain(`Body: ${fullBody}`);
+    expect(input?.params?.message).not.toContain("[scarecrow + duck bartender joke]");
+    expect(input?.params?.presentation).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Senden freigeben",
+              value: "Senden freigeben: Action 117",
+              style: "success",
+            },
+          ],
+        },
+      ],
+    });
+  });
+
   it("does not add mail approval presentations outside the test agent", async () => {
     mockSendResult({ channel: "telegram", to: "telegram:1944659960" });
 
