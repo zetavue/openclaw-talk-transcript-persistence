@@ -81,6 +81,45 @@ const MUTATING_FAILURE_ERROR_WHILE_ACTION_PATTERN = new RegExp(
 );
 const DID_NOT_FAIL_PATTERN = /\b(?:did not|didn't)\s+fail\b/u;
 const NEGATED_FAILURE_PATTERN = /\b(?:no|not|without)\s+(?:failures?|errors?)\b/u;
+const TEST_AGENT_MAIL_APPROVAL_PATTERN = /\bSenden freigeben:\s*Action\s+(\d+)\b/u;
+
+function isTelegramSessionKey(sessionKey: string): boolean {
+  return sessionKey.toLowerCase().includes("telegram");
+}
+
+function buildTestAgentMailApprovalPresentation(params: {
+  agentId?: string;
+  sessionKey: string;
+  text?: string;
+  existingPresentation?: ReplyPayload["presentation"];
+}): ReplyPayload["presentation"] | undefined {
+  if (
+    params.agentId !== "test" ||
+    params.existingPresentation ||
+    !isTelegramSessionKey(params.sessionKey)
+  ) {
+    return undefined;
+  }
+  const actionMatch = params.text ? TEST_AGENT_MAIL_APPROVAL_PATTERN.exec(params.text) : null;
+  if (!actionMatch) {
+    return undefined;
+  }
+  const approval = `Senden freigeben: Action ${actionMatch[1]}`;
+  return {
+    blocks: [
+      {
+        type: "buttons",
+        buttons: [
+          {
+            label: "Senden freigeben",
+            value: approval,
+            style: "success",
+          },
+        ],
+      },
+    ],
+  };
+}
 
 function isRecoverableToolError(error: string | undefined): boolean {
   const errorLower = normalizeOptionalLowercaseString(error) ?? "";
@@ -622,6 +661,15 @@ export function buildEmbeddedRunPayloads(params: {
       }
       if (item.presentation) {
         payload.presentation = item.presentation;
+      }
+      const testAgentMailApprovalPresentation = buildTestAgentMailApprovalPresentation({
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+        text: payload.text,
+        existingPresentation: payload.presentation,
+      });
+      if (testAgentMailApprovalPresentation) {
+        payload.presentation = testAgentMailApprovalPresentation;
       }
       if (item.interactive) {
         payload.interactive = item.interactive;

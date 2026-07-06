@@ -1096,6 +1096,64 @@ describe("message tool delivery mode schema", () => {
 });
 
 describe("message tool agent routing", () => {
+  it("adds a Telegram approval presentation for test-agent mail draft receipts", async () => {
+    mockSendResult({ channel: "telegram", to: "telegram:1944659960" });
+
+    const input = await executeSend({
+      action: {
+        message:
+          "Draft created.\n\n" +
+          "Action ID: 109\n" +
+          "Recipient: test@zetavue.com\n" +
+          "Subject: Button render verification 2\n" +
+          "Body: button rendering test with presentation only\n" +
+          "Server draft mailbox: Entwürfe\n" +
+          "Provider draft ID: 5\n" +
+          "Short approval: Senden freigeben: Action 109",
+      },
+      toolOptions: {
+        agentId: "test",
+        currentChannelProvider: "telegram",
+        currentMessagingTarget: "telegram:1944659960",
+      },
+    });
+
+    expect(input?.params?.presentation).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Senden freigeben",
+              value: "Senden freigeben: Action 109",
+              style: "success",
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("does not add mail approval presentations outside the test agent", async () => {
+    mockSendResult({ channel: "telegram", to: "telegram:1944659960" });
+
+    const input = await executeSend({
+      action: {
+        message:
+          "Draft created.\n\n" +
+          "Action ID: 109\n" +
+          "Short approval: Senden freigeben: Action 109",
+      },
+      toolOptions: {
+        agentId: "restaurant",
+        currentChannelProvider: "telegram",
+        currentMessagingTarget: "telegram:1944659960",
+      },
+    });
+
+    expect(input?.params?.presentation).toBeUndefined();
+  });
+
   it("derives agentId from the session key", async () => {
     mockSendResult();
 

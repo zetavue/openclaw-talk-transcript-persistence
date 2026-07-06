@@ -152,6 +152,55 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     expectSinglePayloadText(payloads, "Done.");
   });
 
+  it("adds a Telegram approval presentation to test-agent mail draft final replies", () => {
+    const text = [
+      "Draft created.",
+      "",
+      "Action ID: 112",
+      "Recipient: test@zetavue.com",
+      "Subject: Button render verification 3",
+      "Body: runtime fallback button test",
+      "Server draft mailbox: Entwurfe",
+      "Provider draft ID: 6",
+      "Short approval: Senden freigeben: Action 112",
+    ].join("\n");
+
+    const payloads = buildPayloads({
+      agentId: "test",
+      sessionKey: "agent:test:telegram:direct:1944659960",
+      assistantTexts: [text],
+    });
+
+    expectSinglePayloadText(payloads, text);
+    expect(payloads[0]?.presentation).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Senden freigeben",
+              value: "Senden freigeben: Action 112",
+              style: "success",
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("does not add mail approval presentations outside the test agent final reply path", () => {
+    const text = "Short approval: Senden freigeben: Action 112";
+
+    const payloads = buildPayloads({
+      agentId: "restaurant",
+      sessionKey: "agent:restaurant:telegram:direct:1944659960",
+      assistantTexts: [text],
+    });
+
+    expectSinglePayloadText(payloads, text);
+    expect(payloads[0]?.presentation).toBeUndefined();
+  });
+
   it("keeps a current one-chunk reply when only a stale transcript assistant is available", () => {
     const payloads = buildPayloads({
       assistantTexts: ["Current room event reply."],

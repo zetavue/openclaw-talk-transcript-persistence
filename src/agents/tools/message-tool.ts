@@ -375,6 +375,58 @@ function hasSanitizedSendPayloadContent(params: Record<string, unknown>): boolea
   );
 }
 
+const TEST_AGENT_MAIL_APPROVAL_PATTERN = /\bSenden freigeben:\s*Action\s+(\d+)\b/u;
+
+function maybeAddTestAgentMailApprovalPresentation(
+  params: Record<string, unknown>,
+  options: {
+    agentId?: string;
+    currentChannelProvider?: string;
+  },
+): void {
+  if (options.agentId !== "test" || params.presentation !== undefined) {
+    return;
+  }
+  const action = normalizeOptionalString(params.action);
+  if (action !== "send") {
+    return;
+  }
+  const channel = normalizeMessageChannel(
+    normalizeOptionalString(params.channel) ??
+      normalizeOptionalString(params.provider) ??
+      options.currentChannelProvider,
+  );
+  if (channel !== "telegram") {
+    return;
+  }
+  const message = readFirstStringParam(params, [
+    "message",
+    "text",
+    "content",
+    "caption",
+    "SendMessage",
+  ]);
+  const actionMatch = message ? TEST_AGENT_MAIL_APPROVAL_PATTERN.exec(message) : null;
+  if (!actionMatch) {
+    return;
+  }
+  const approval = `Senden freigeben: Action ${actionMatch[1]}`;
+  params.presentation = {
+    blocks: [
+      {
+        type: "buttons",
+        buttons: [
+          {
+            label: "Senden freigeben",
+            value: approval,
+            style: "success",
+          },
+        ],
+      },
+    ],
+  };
+}
+
 function buildRoutingSchema() {
   return {
     channel: Type.Optional(Type.String()),
@@ -1295,6 +1347,10 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
               : "Suppressed outbound message text because it matched internal runtime context.",
         });
       }
+      maybeAddTestAgentMailApprovalPresentation(params, {
+        agentId: resolvedAgentId,
+        currentChannelProvider: effectiveCurrentChannel.currentChannelProvider,
+      });
       const requireExplicitTarget = options?.requireExplicitTarget === true;
       if (requireExplicitTarget && actionNeedsExplicitTarget(action)) {
         const explicitTarget =
