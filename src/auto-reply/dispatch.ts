@@ -381,30 +381,27 @@ function buildReplyPayloadSendingBeforeDeliver(
   };
 }
 
-const TEST_AGENT_MAIL_APPROVAL_PATTERN = /\bSenden freigeben:\s*Action\s+(\d+)\b/u;
+const MAIL_APPROVAL_PATTERN = /\bSenden freigeben:\s*Action\s+(\d+)\b/u;
 
-function isTestAgentTelegramSourceReply(finalized: FinalizedMsgContext): boolean {
+function isTelegramSourceReply(finalized: FinalizedMsgContext): boolean {
   const channel = String(finalized.Surface ?? finalized.Provider ?? "")
     .trim()
     .toLowerCase();
-  if (channel !== "telegram") {
-    return false;
-  }
-  return String(finalized.SessionKey ?? "").startsWith("agent:test:");
+  return channel === "telegram";
 }
 
-function buildTestAgentMailApprovalBeforeDeliver(
+function buildMailApprovalBeforeDeliver(
   ctx: MsgContext | FinalizedMsgContext,
 ): ReplyDispatchBeforeDeliver | undefined {
   const finalized = finalizeInboundContext(ctx);
-  if (!isTestAgentTelegramSourceReply(finalized)) {
+  if (!isTelegramSourceReply(finalized)) {
     return undefined;
   }
   return (payload) => {
     if (payload.presentation || !payload.text) {
       return payload;
     }
-    const match = TEST_AGENT_MAIL_APPROVAL_PATTERN.exec(payload.text);
+    const match = MAIL_APPROVAL_PATTERN.exec(payload.text);
     const actionId = match ? Number(match[1]) : NaN;
     if (!Number.isSafeInteger(actionId) || actionId <= 0) {
       return payload;
@@ -626,17 +623,17 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
     finalized,
     replyPayloadRunState,
   );
-  const testAgentMailApprovalBeforeDeliver = buildTestAgentMailApprovalBeforeDeliver(finalized);
+  const mailApprovalBeforeDeliver = buildMailApprovalBeforeDeliver(finalized);
   const globalBeforeDeliver = combineBeforeDeliverHooks(
     replyPayloadBeforeDeliver,
     buildMessageSendingBeforeDeliver(finalized),
-    testAgentMailApprovalBeforeDeliver,
+    mailApprovalBeforeDeliver,
   );
   const configuredBeforeDeliver = params.dispatcherOptions.beforeDeliver
     ? combineBeforeDeliverHooks(
         params.dispatcherOptions.beforeDeliver,
         replyPayloadBeforeDeliver,
-        testAgentMailApprovalBeforeDeliver,
+        mailApprovalBeforeDeliver,
       )
     : globalBeforeDeliver;
   const beforeDeliver: ReplyDispatchBeforeDeliver | undefined =
@@ -731,17 +728,17 @@ export async function dispatchInboundMessageWithDispatcher(params: {
     params.ctx,
     replyPayloadRunState,
   );
-  const testAgentMailApprovalBeforeDeliver = buildTestAgentMailApprovalBeforeDeliver(params.ctx);
+  const mailApprovalBeforeDeliver = buildMailApprovalBeforeDeliver(params.ctx);
   const globalBeforeDeliver = combineBeforeDeliverHooks(
     replyPayloadBeforeDeliver,
     buildMessageSendingBeforeDeliver(params.ctx),
-    testAgentMailApprovalBeforeDeliver,
+    mailApprovalBeforeDeliver,
   );
   const composedBeforeDeliver = params.dispatcherOptions.beforeDeliver
     ? combineBeforeDeliverHooks(
         params.dispatcherOptions.beforeDeliver,
         replyPayloadBeforeDeliver,
-        testAgentMailApprovalBeforeDeliver,
+        mailApprovalBeforeDeliver,
       )
     : globalBeforeDeliver;
   const dispatcher = createReplyDispatcher({

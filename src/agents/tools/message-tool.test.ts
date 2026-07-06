@@ -1096,7 +1096,7 @@ describe("message tool delivery mode schema", () => {
 });
 
 describe("message tool agent routing", () => {
-  it("adds a Telegram approval presentation for test-agent mail draft receipts", async () => {
+  it("adds a Telegram approval presentation for mail draft receipts on any agent", async () => {
     mockSendResult({ channel: "telegram", to: "telegram:1944659960" });
 
     const input = await executeSend({
@@ -1112,7 +1112,7 @@ describe("message tool agent routing", () => {
           "Short approval: Senden freigeben: Action 109",
       },
       toolOptions: {
-        agentId: "test",
+        agentId: "restaurant",
         currentChannelProvider: "telegram",
         currentMessagingTarget: "telegram:1944659960",
       },
@@ -1134,7 +1134,7 @@ describe("message tool agent routing", () => {
     });
   });
 
-  it("replaces summarized test-agent Telegram mail draft receipts with the full stored body", async () => {
+  it("replaces summarized Telegram mail draft receipts with the full stored body", async () => {
     mockSendResult({ channel: "telegram", to: "telegram:1944659960" });
 
     const fullBody =
@@ -1197,7 +1197,55 @@ describe("message tool agent routing", () => {
     });
   });
 
-  it("does not add mail approval presentations outside the test agent", async () => {
+  it("does not replace summarized mail draft bodies from another agent account", async () => {
+    mockSendResult({ channel: "telegram", to: "telegram:1944659960" });
+
+    const fullBody = "private test-agent draft body";
+
+    const input = await executeSend({
+      action: {
+        message:
+          "New draft reply created.\n\n" +
+          "Action ID: 117\n" +
+          "Subject: Re: Test\n" +
+          "Body: [summary only]\n\n" +
+          "Approval: Senden freigeben: Action 117",
+      },
+      toolOptions: {
+        agentId: "restaurant",
+        currentChannelProvider: "telegram",
+        currentMessagingTarget: "telegram:1944659960",
+        lookupMailActionReceipt: async () => ({
+          id: 117,
+          account: "test",
+          recipient: "cistamea@outlook.com",
+          subject: "Re: Test",
+          bodyText: fullBody,
+          draftMailbox: "Entwürfe",
+          providerDraftId: "9",
+        }),
+      } as never,
+    });
+
+    expect(input?.params?.message).toContain("Body: [summary only]");
+    expect(input?.params?.message).not.toContain(fullBody);
+    expect(input?.params?.presentation).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Senden freigeben",
+              value: "Senden freigeben: Action 117",
+              style: "success",
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("adds mail approval presentations for non-test agents", async () => {
     mockSendResult({ channel: "telegram", to: "telegram:1944659960" });
 
     const input = await executeSend({
@@ -1214,7 +1262,20 @@ describe("message tool agent routing", () => {
       },
     });
 
-    expect(input?.params?.presentation).toBeUndefined();
+    expect(input?.params?.presentation).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Senden freigeben",
+              value: "Senden freigeben: Action 109",
+              style: "success",
+            },
+          ],
+        },
+      ],
+    });
   });
 
   it("derives agentId from the session key", async () => {

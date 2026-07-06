@@ -427,7 +427,7 @@ describe("withReplyDispatcher", () => {
     );
   });
 
-  it("adds Telegram approval buttons to test-agent mail approval source replies", async () => {
+  it("adds Telegram approval buttons to mail approval source replies for any agent", async () => {
     hoisted.getGlobalHookRunnerMock.mockReturnValue({
       hasHooks: vi.fn(() => false),
     });
@@ -435,7 +435,7 @@ describe("withReplyDispatcher", () => {
     hoisted.dispatchReplyFromConfigMock.mockResolvedValueOnce({ text: "ok" });
 
     await dispatchInboundMessageWithDispatcher({
-      ctx: buildTestCtx({ Surface: "telegram", SessionKey: "agent:test:session" }),
+      ctx: buildTestCtx({ Surface: "telegram", SessionKey: "agent:restaurant:session" }),
       cfg: {} as OpenClawConfig,
       dispatcherOptions: {
         deliver: async () => undefined,

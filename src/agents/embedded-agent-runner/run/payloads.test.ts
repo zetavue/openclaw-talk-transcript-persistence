@@ -152,7 +152,7 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     expectSinglePayloadText(payloads, "Done.");
   });
 
-  it("adds a Telegram approval presentation to test-agent mail draft final replies", () => {
+  it("adds a Telegram approval presentation to mail draft final replies for any agent", () => {
     const text = [
       "Draft created.",
       "",
@@ -166,8 +166,8 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     ].join("\n");
 
     const payloads = buildPayloads({
-      agentId: "test",
-      sessionKey: "agent:test:telegram:direct:1944659960",
+      agentId: "restaurant",
+      sessionKey: "agent:restaurant:telegram:direct:1944659960",
       assistantTexts: [text],
     });
 
@@ -188,12 +188,12 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
   });
 
-  it("does not add mail approval presentations outside the test agent final reply path", () => {
+  it("does not add mail approval presentations outside Telegram final reply paths", () => {
     const text = "Short approval: Senden freigeben: Action 112";
 
     const payloads = buildPayloads({
       agentId: "restaurant",
-      sessionKey: "agent:restaurant:telegram:direct:1944659960",
+      sessionKey: "agent:restaurant:dashboard:session",
       assistantTexts: [text],
     });
 
