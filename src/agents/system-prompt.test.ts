@@ -995,15 +995,16 @@ describe("buildAgentSystemPrompt", () => {
   it("tells agents to surface mail draft send buttons when available", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
-      toolNames: ["message", "mail_create_draft"],
+      toolNames: ["message", "mail_create_draft", "mail_register_draft_send"],
       runtimeInfo: {
         channel: "telegram",
         capabilities: ["inlineButtons"],
       },
     });
 
-    expect(prompt).toContain("When `mail_create_draft` returns `send_buttons`");
+    expect(prompt).toContain("When `mail_create_draft` or `mail_register_draft_send` returns");
     expect(prompt).toContain("pass `send_buttons` unchanged as `buttons`");
+    expect(prompt).toContain("use `mail_register_draft_send` to create a pending Action");
   });
 
   it("describes Telegram rich text only for rich Telegram runtimes", () => {

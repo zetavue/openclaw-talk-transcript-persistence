@@ -381,6 +381,55 @@ function buildReplyPayloadSendingBeforeDeliver(
   };
 }
 
+const TEST_AGENT_MAIL_APPROVAL_PATTERN = /\bSenden freigeben:\s*Action\s+(\d+)\b/u;
+
+function isTestAgentTelegramSourceReply(finalized: FinalizedMsgContext): boolean {
+  const channel = String(finalized.Surface ?? finalized.Provider ?? "")
+    .trim()
+    .toLowerCase();
+  if (channel !== "telegram") {
+    return false;
+  }
+  return String(finalized.SessionKey ?? "").startsWith("agent:test:");
+}
+
+function buildTestAgentMailApprovalBeforeDeliver(
+  ctx: MsgContext | FinalizedMsgContext,
+): ReplyDispatchBeforeDeliver | undefined {
+  const finalized = finalizeInboundContext(ctx);
+  if (!isTestAgentTelegramSourceReply(finalized)) {
+    return undefined;
+  }
+  return (payload) => {
+    if (payload.presentation || !payload.text) {
+      return payload;
+    }
+    const match = TEST_AGENT_MAIL_APPROVAL_PATTERN.exec(payload.text);
+    const actionId = match ? Number(match[1]) : NaN;
+    if (!Number.isSafeInteger(actionId) || actionId <= 0) {
+      return payload;
+    }
+    const approval = `Senden freigeben: Action ${actionId}`;
+    return copyReplyPayloadMetadata(payload, {
+      ...payload,
+      presentation: {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              {
+                label: "Senden freigeben",
+                value: approval,
+                style: "success",
+              },
+            ],
+          },
+        ],
+      },
+    });
+  };
+}
+
 function bindReplyPayloadRunState(
   replyOptions: InternalDispatchReplyOptions | undefined,
   runState: ReplyPayloadRunState,
@@ -577,12 +626,18 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
     finalized,
     replyPayloadRunState,
   );
+  const testAgentMailApprovalBeforeDeliver = buildTestAgentMailApprovalBeforeDeliver(finalized);
   const globalBeforeDeliver = combineBeforeDeliverHooks(
     replyPayloadBeforeDeliver,
     buildMessageSendingBeforeDeliver(finalized),
+    testAgentMailApprovalBeforeDeliver,
   );
   const configuredBeforeDeliver = params.dispatcherOptions.beforeDeliver
-    ? combineBeforeDeliverHooks(params.dispatcherOptions.beforeDeliver, replyPayloadBeforeDeliver)
+    ? combineBeforeDeliverHooks(
+        params.dispatcherOptions.beforeDeliver,
+        replyPayloadBeforeDeliver,
+        testAgentMailApprovalBeforeDeliver,
+      )
     : globalBeforeDeliver;
   const beforeDeliver: ReplyDispatchBeforeDeliver | undefined =
     foregroundReplyFence || configuredBeforeDeliver
@@ -676,12 +731,18 @@ export async function dispatchInboundMessageWithDispatcher(params: {
     params.ctx,
     replyPayloadRunState,
   );
+  const testAgentMailApprovalBeforeDeliver = buildTestAgentMailApprovalBeforeDeliver(params.ctx);
   const globalBeforeDeliver = combineBeforeDeliverHooks(
     replyPayloadBeforeDeliver,
     buildMessageSendingBeforeDeliver(params.ctx),
+    testAgentMailApprovalBeforeDeliver,
   );
   const composedBeforeDeliver = params.dispatcherOptions.beforeDeliver
-    ? combineBeforeDeliverHooks(params.dispatcherOptions.beforeDeliver, replyPayloadBeforeDeliver)
+    ? combineBeforeDeliverHooks(
+        params.dispatcherOptions.beforeDeliver,
+        replyPayloadBeforeDeliver,
+        testAgentMailApprovalBeforeDeliver,
+      )
     : globalBeforeDeliver;
   const dispatcher = createReplyDispatcher({
     ...params.dispatcherOptions,

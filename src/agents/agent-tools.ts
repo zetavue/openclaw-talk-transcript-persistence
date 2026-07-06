@@ -117,7 +117,12 @@ import {
   replaceWithEffectiveCronCreatorToolAllowlist,
   type CronCreatorToolAllowlistEntry,
 } from "./tools/cron-tool.js";
-import { createMailCreateDraftTool, MAIL_CREATE_DRAFT_TOOL_NAME } from "./tools/mail-draft-tool.js";
+import {
+  createMailCreateDraftTool,
+  createMailRegisterDraftSendTool,
+  MAIL_CREATE_DRAFT_TOOL_NAME,
+  MAIL_REGISTER_DRAFT_SEND_TOOL_NAME,
+} from "./tools/mail-draft-tool.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
 const MEMORY_FLUSH_ALLOWED_TOOL_NAMES = new Set(["read", "write"]);
@@ -638,7 +643,9 @@ export function createOpenClawCodingTools(options?: {
       : []),
     ...(runtimeToolAllowlistIncludesMessage ? ["message"] : []),
     ...(forceHeartbeatTool ? [HEARTBEAT_RESPONSE_TOOL_NAME] : []),
-    ...(forceStructuredMailDraftTool ? [MAIL_CREATE_DRAFT_TOOL_NAME] : []),
+    ...(forceStructuredMailDraftTool
+      ? [MAIL_CREATE_DRAFT_TOOL_NAME, MAIL_REGISTER_DRAFT_SEND_TOOL_NAME]
+      : []),
     ...toolSearchControlAllowlist,
   ];
   const profilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(profilePolicy, [
@@ -984,7 +991,9 @@ export function createOpenClawCodingTools(options?: {
       })
     : [];
   const mailDraftTools =
-    includeOpenClawTools && forceStructuredMailDraftTool ? [createMailCreateDraftTool()] : [];
+    includeOpenClawTools && forceStructuredMailDraftTool
+      ? [createMailCreateDraftTool(), createMailRegisterDraftSendTool()]
+      : [];
   const tools: AnyAgentTool[] = [
     ...base,
     ...(includeBaseCodingTools && sandboxRoot

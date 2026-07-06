@@ -9,7 +9,9 @@ import { jsonResult, readStringArrayParam, readStringParam, type AnyAgentTool } 
 const execFileAsync = promisify(execFile);
 
 export const MAIL_CREATE_DRAFT_TOOL_NAME = "mail_create_draft";
+export const MAIL_REGISTER_DRAFT_SEND_TOOL_NAME = "mail_register_draft_send";
 const MAIL_CREATE_DRAFT_MARKER = "openclaw-local-structured-mail-create-draft-v1";
+const MAIL_REGISTER_DRAFT_SEND_MARKER = "openclaw-local-structured-mail-register-draft-send-v1";
 const MAIL_CREATE_DRAFT_GROUNDING_GUARD_MARKER = "openclaw-local-mail-draft-grounding-guard-v1";
 
 type MailCreateDraftReceipt = {
@@ -33,6 +35,8 @@ type MailCreateDraftReceipt = {
   >;
   recipient?: string;
   subject?: string;
+  body?: string;
+  body_text?: string;
   error?: string;
 };
 
@@ -83,19 +87,76 @@ function parseCreateDraftOutput(stdout: string): MailCreateDraftReceipt {
   };
 }
 
+function readReceiptString(record: Record<string, unknown>, key: string): string | undefined {
+  const value = record[key];
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function parseRegisterDraftSendOutput(stdout: string): MailCreateDraftReceipt {
+  const parsed = JSON.parse(stdout || "{}") as Record<string, unknown>;
+  const actionId = Number(parsed.action_id);
+  const shortApproval = readReceiptString(parsed, "short_approval");
+  return {
+    ok: parsed.ok === true && Number.isSafeInteger(actionId) && actionId > 0,
+    ...(Number.isSafeInteger(actionId) && actionId > 0 ? { action_id: actionId } : {}),
+    ...(readReceiptString(parsed, "draft") ? { draft: readReceiptString(parsed, "draft") } : {}),
+    ...(readReceiptString(parsed, "draft_md")
+      ? { draft_md: readReceiptString(parsed, "draft_md") }
+      : {}),
+    ...(readReceiptString(parsed, "draft_html")
+      ? { draft_html: readReceiptString(parsed, "draft_html") }
+      : {}),
+    ...(readReceiptString(parsed, "draft_eml")
+      ? { draft_eml: readReceiptString(parsed, "draft_eml") }
+      : {}),
+    ...(typeof parsed.server_draft === "boolean" ? { server_draft: parsed.server_draft } : {}),
+    ...(readReceiptString(parsed, "draft_mailbox")
+      ? { draft_mailbox: readReceiptString(parsed, "draft_mailbox") }
+      : {}),
+    ...(readReceiptString(parsed, "provider_draft_id")
+      ? { provider_draft_id: readReceiptString(parsed, "provider_draft_id") }
+      : {}),
+    ...(readReceiptString(parsed, "approval")
+      ? { approval: readReceiptString(parsed, "approval") }
+      : {}),
+    ...(shortApproval ? { short_approval: shortApproval } : {}),
+    ...(readReceiptString(parsed, "recipient")
+      ? { recipient: readReceiptString(parsed, "recipient") }
+      : {}),
+    ...(readReceiptString(parsed, "subject")
+      ? { subject: readReceiptString(parsed, "subject") }
+      : {}),
+    ...(readReceiptString(parsed, "body") ? { body: readReceiptString(parsed, "body") } : {}),
+    ...(readReceiptString(parsed, "body_text")
+      ? { body_text: readReceiptString(parsed, "body_text") }
+      : {}),
+    ...(Number.isSafeInteger(actionId) && actionId > 0 && shortApproval
+      ? {
+          send_buttons: [
+            [
+              {
+                text: "Senden freigeben",
+                callback_data: shortApproval,
+                style: "success" as const,
+              },
+            ],
+          ],
+        }
+      : {}),
+  };
+}
+
 function buildFailureReceipt(
   error: unknown,
   subject?: string,
   recipient?: string,
+  fallbackMessage = "mail draft creation failed",
 ): MailCreateDraftReceipt {
   const record = error && typeof error === "object" ? (error as Record<string, unknown>) : {};
   const stderr = typeof record.stderr === "string" ? record.stderr.trim() : "";
   const stdout = typeof record.stdout === "string" ? record.stdout.trim() : "";
   const message =
-    stderr ||
-    stdout ||
-    (error instanceof Error ? error.message : undefined) ||
-    "mail draft creation failed";
+    stderr || stdout || (error instanceof Error ? error.message : undefined) || fallbackMessage;
   return {
     ok: false,
     ...(recipient ? { recipient } : {}),
@@ -335,6 +396,79 @@ export function createMailCreateDraftTool(options?: { mailWorkspaceDir?: string 
         return jsonResult(buildFailureReceipt(error, subject, recipient));
       } finally {
         await fs.rm(tmpDir, { recursive: true, force: true });
+      }
+    },
+  } as AnyAgentTool;
+}
+
+export function createMailRegisterDraftSendTool(options?: {
+  mailWorkspaceDir?: string;
+}): AnyAgentTool {
+  const mailWorkspaceDir = options?.mailWorkspaceDir ?? defaultMailWorkspaceDir();
+  return {
+    name: MAIL_REGISTER_DRAFT_SEND_TOOL_NAME,
+    label: "mail.register_draft_send",
+    displaySummary: "register server draft send action",
+    description: [
+      "Structured Mail Layer tool for turning an existing IMAP Drafts UID into a pending send action.",
+      "Use this when the user asks to send a draft by UID from Entwürfe/Drafts and no Action ID is available.",
+      "This tool never sends mail directly; it registers the server draft, stores the full body in Mail Layer, and returns short_approval plus send_buttons.",
+      "After the receipt includes send_buttons and the current channel supports inline buttons, send the visible draft receipt with message(action=send) and pass send_buttons unchanged as buttons.",
+      `Marker: ${MAIL_REGISTER_DRAFT_SEND_MARKER}`,
+    ].join(" "),
+    parameters: Type.Object({
+      account: Type.String({
+        description: 'Mail account id, for example "test" or "restaurant".',
+      }),
+      uid: Type.String({
+        description: "IMAP UID of the existing server-side draft.",
+      }),
+      mailbox: Type.Optional(
+        Type.String({
+          description: 'Draft mailbox containing the UID. Defaults to "Entwürfe" when omitted.',
+        }),
+      ),
+    }),
+    async execute(_toolCallId, params, signal) {
+      const input = params && typeof params === "object" ? (params as Record<string, unknown>) : {};
+      const account = readStringParam(input, "account", { required: true });
+      const uid = readStringParam(input, "uid", { required: true });
+      const mailbox = readStringParam(input, "mailbox") ?? "Entwürfe";
+      try {
+        const execResult = await execFileAsync(
+          "python3",
+          [
+            "scripts/register_draft_send.py",
+            "--account",
+            account,
+            "--mailbox",
+            mailbox,
+            "--uid",
+            uid,
+          ],
+          {
+            cwd: mailWorkspaceDir,
+            signal,
+            timeout: 120_000,
+            maxBuffer: 1024 * 1024,
+          },
+        );
+        const stdout =
+          typeof execResult === "string"
+            ? execResult
+            : typeof execResult.stdout === "string"
+              ? execResult.stdout
+              : execResult.stdout.toString("utf8");
+        return jsonResult(parseRegisterDraftSendOutput(stdout));
+      } catch (error) {
+        return jsonResult(
+          buildFailureReceipt(
+            error,
+            undefined,
+            undefined,
+            "server draft send action registration failed",
+          ),
+        );
       }
     },
   } as AnyAgentTool;

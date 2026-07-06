@@ -562,8 +562,13 @@ function buildMessagingSection(params: {
                 ? `- Inline buttons not enabled for ${params.runtimeChannel}. If you need them, ask to set ${params.runtimeChannel}.capabilities.inlineButtons ("dm"|"group"|"all"|"allowlist").`
                 : ""
             : "",
-          params.inlineButtonsEnabled && params.availableTools.has("mail_create_draft")
-            ? "- When `mail_create_draft` returns `send_buttons`, send the visible draft receipt with `message(action=send)` and pass `send_buttons` unchanged as `buttons`; the button is the user's explicit send confirmation."
+          params.availableTools.has("mail_register_draft_send")
+            ? "- When the user asks to send an existing Drafts/Entwürfe UID without an Action ID, use `mail_register_draft_send` to create a pending Action from that server draft; then show the receipt and `send_buttons`. Do not refuse only because the draft predates the current conversation."
+            : "",
+          params.inlineButtonsEnabled &&
+          (params.availableTools.has("mail_create_draft") ||
+            params.availableTools.has("mail_register_draft_send"))
+            ? "- When `mail_create_draft` or `mail_register_draft_send` returns `send_buttons`, send the visible draft receipt with `message(action=send)` and pass `send_buttons` unchanged as `buttons`; the button is the user's explicit send confirmation."
             : "",
           ...(params.messageToolHints ?? []),
         ]

@@ -427,6 +427,58 @@ describe("withReplyDispatcher", () => {
     );
   });
 
+  it("adds Telegram approval buttons to test-agent mail approval source replies", async () => {
+    hoisted.getGlobalHookRunnerMock.mockReturnValue({
+      hasHooks: vi.fn(() => false),
+    });
+    hoisted.createReplyDispatcherMock.mockReturnValueOnce(createDispatcher([]));
+    hoisted.dispatchReplyFromConfigMock.mockResolvedValueOnce({ text: "ok" });
+
+    await dispatchInboundMessageWithDispatcher({
+      ctx: buildTestCtx({ Surface: "telegram", SessionKey: "agent:test:session" }),
+      cfg: {} as OpenClawConfig,
+      dispatcherOptions: {
+        deliver: async () => undefined,
+      },
+      replyOptions: { runId: "run-mail-approval" },
+      replyResolver: async () => ({ text: "ok" }),
+    });
+
+    const dispatcherOptions = requireReplyDispatcherOptions();
+    if (!dispatcherOptions?.beforeDeliver) {
+      throw new Error("expected beforeDeliver hook");
+    }
+
+    const payload = await dispatcherOptions.beforeDeliver(
+      {
+        text:
+          "Draft registered for send (UID 10 -> Action 119)\n\n" +
+          "Approval phrase: Senden freigeben: Action 119",
+      },
+      { kind: "final" },
+    );
+
+    expect(payload).toEqual({
+      text:
+        "Draft registered for send (UID 10 -> Action 119)\n\n" +
+        "Approval phrase: Senden freigeben: Action 119",
+      presentation: {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              {
+                label: "Senden freigeben",
+                value: "Senden freigeben: Action 119",
+                style: "success",
+              },
+            ],
+          },
+        ],
+      },
+    });
+  });
+
   it("correlates reply_payload_sending usageState with the generated run id", async () => {
     const usageState = { provider: "openai", model: "gpt-5.5" };
     const runReplyPayloadSending = vi.fn(async ({ payload }: { payload: { text?: string } }) => ({

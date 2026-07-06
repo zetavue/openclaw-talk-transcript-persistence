@@ -1,17 +1,36 @@
 import { execFile } from "node:child_process";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createMailCreateDraftTool } from "./mail-draft-tool.js";
+import { createMailCreateDraftTool, createMailRegisterDraftSendTool } from "./mail-draft-tool.js";
 
 vi.mock("node:child_process", () => ({
   execFile: vi.fn((...args: unknown[]) => {
-    const stdout = [
-      "action_id=1",
-      "draft=/tmp/mail/drafts/000001-test.md",
-      "draft_md=/tmp/mail/drafts/000001-test.md",
-      "server_draft=false",
-      "approval=Senden freigeben: Test",
-      "short_approval=Senden freigeben: Action 1",
-    ].join("\n");
+    const commandArgs = Array.isArray(args[1]) ? args[1] : [];
+    const stdout =
+      commandArgs[0] === "scripts/register_draft_send.py"
+        ? JSON.stringify({
+            ok: true,
+            action_id: 118,
+            draft: "/tmp/mail/drafts/000118-Re_Test.md",
+            draft_md: "/tmp/mail/drafts/000118-Re_Test.md",
+            draft_html: "/tmp/mail/drafts/000118-Re_Test.html",
+            draft_eml: "/tmp/mail/drafts/000118-Re_Test.eml",
+            server_draft: true,
+            draft_mailbox: "Entwürfe",
+            provider_draft_id: "10",
+            recipient: "cistamea@outlook.com",
+            subject: "Re: Test",
+            body: "hello from existing draft",
+            body_text: "hello from existing draft",
+            short_approval: "Senden freigeben: Action 118",
+          })
+        : [
+            "action_id=1",
+            "draft=/tmp/mail/drafts/000001-test.md",
+            "draft_md=/tmp/mail/drafts/000001-test.md",
+            "server_draft=false",
+            "approval=Senden freigeben: Test",
+            "short_approval=Senden freigeben: Action 1",
+          ].join("\n");
     const callback = args.at(-1);
     if (typeof callback === "function") {
       callback(null, stdout, "");
@@ -114,5 +133,49 @@ describe("mail_create_draft recipient grounding", () => {
     expect(details.ok).toBe(false);
     expect(String(details.error)).toContain("reply_source required");
     expect(String(details.error)).not.toContain("recipient for new mail drafts");
+  });
+});
+
+describe("mail_register_draft_send", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("registers an existing server draft UID and returns approval buttons", async () => {
+    const tool = createMailRegisterDraftSendTool({ mailWorkspaceDir: "/tmp/mail" });
+
+    const result = await tool.execute("call-register-draft", {
+      account: "test",
+      mailbox: "Entwürfe",
+      uid: "10",
+    });
+
+    const details = resultDetails(result.details);
+    expect(execFile).toHaveBeenCalledOnce();
+    const [command, args, options] = vi.mocked(execFile).mock.calls[0] ?? [];
+    expect(command).toBe("python3");
+    expect(args).toEqual([
+      "scripts/register_draft_send.py",
+      "--account",
+      "test",
+      "--mailbox",
+      "Entwürfe",
+      "--uid",
+      "10",
+    ]);
+    expect(options).toEqual(expect.objectContaining({ cwd: "/tmp/mail" }));
+    expect(details.ok).toBe(true);
+    expect(details.action_id).toBe(118);
+    expect(details.provider_draft_id).toBe("10");
+    expect(details.body_text).toBe("hello from existing draft");
+    expect(details.send_buttons).toEqual([
+      [
+        {
+          text: "Senden freigeben",
+          callback_data: "Senden freigeben: Action 118",
+          style: "success",
+        },
+      ],
+    ]);
   });
 });
