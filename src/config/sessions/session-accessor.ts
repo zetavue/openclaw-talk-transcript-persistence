@@ -972,15 +972,78 @@ function cloneSessionEntries(store: Record<string, SessionEntry>): Record<string
   );
 }
 
+const REPLY_SESSION_INITIALIZATION_CONCURRENT_RUN_METADATA_FIELDS = [
+  "status",
+  "startedAt",
+  "endedAt",
+  "runtimeMs",
+  "abortedLastRun",
+  "restartRecoveryRuns",
+  "inputTokens",
+  "outputTokens",
+  "totalTokens",
+  "totalTokensFresh",
+  "estimatedCostUsd",
+  "cacheRead",
+  "cacheWrite",
+  "modelProvider",
+  "model",
+  "fallbackNoticeSelectedModel",
+  "fallbackNoticeActiveModel",
+  "fallbackNoticeReason",
+  "contextTokens",
+  "contextBudgetStatus",
+  "skillsSnapshot",
+  "systemPromptReport",
+] as const satisfies readonly (keyof SessionEntry)[];
+
+const REPLY_SESSION_INITIALIZATION_REVISION_IGNORED_FIELDS = [
+  "updatedAt",
+  "lastInteractionAt",
+  ...REPLY_SESSION_INITIALIZATION_CONCURRENT_RUN_METADATA_FIELDS,
+] as const satisfies readonly (keyof SessionEntry)[];
+
 function createReplySessionInitializationRevision(entry: SessionEntry | undefined): string {
   if (!entry) {
     return "null";
   }
   const stableEntry: Partial<SessionEntry> = { ...entry };
-  // Transcript appends touch updatedAt independently of reply-session
-  // initialization. Treat it as activity metadata, not an identity conflict.
-  delete stableEntry.updatedAt;
+  // Activity, lifecycle, usage, and prompt-cache metadata can be updated by
+  // transcript/lifecycle writers while reply-session initialization is still
+  // committing. Stable identity fields still participate in the guard.
+  for (const field of REPLY_SESSION_INITIALIZATION_REVISION_IGNORED_FIELDS) {
+    delete stableEntry[field];
+  }
   return JSON.stringify(stableEntry);
+}
+
+function preserveConcurrentReplySessionRunMetadata(params: {
+  currentEntry?: SessionEntry;
+  sessionEntry: SessionEntry;
+}): SessionEntry {
+  if (!params.currentEntry || params.currentEntry.sessionId !== params.sessionEntry.sessionId) {
+    return params.sessionEntry;
+  }
+
+  let sessionEntry = params.sessionEntry;
+  const sessionEntryRecord = () => sessionEntry as Record<string, unknown>;
+  const currentEntryRecord = params.currentEntry as Record<string, unknown>;
+  for (const field of REPLY_SESSION_INITIALIZATION_CONCURRENT_RUN_METADATA_FIELDS) {
+    const currentHasField = Object.hasOwn(params.currentEntry, field);
+    const sessionHasField = Object.hasOwn(sessionEntry, field);
+    if (!currentHasField && !sessionHasField) {
+      continue;
+    }
+    if (sessionEntry === params.sessionEntry) {
+      sessionEntry = { ...params.sessionEntry };
+    }
+    if (currentHasField) {
+      sessionEntryRecord()[field] = currentEntryRecord[field];
+    } else {
+      delete sessionEntryRecord()[field];
+    }
+  }
+  return sessionEntry;
 }
 
 function resolveInitializedReplySessionEntry(params: {
@@ -1450,11 +1513,15 @@ export async function commitReplySessionInitialization(params: {
             sessionEntry: params.sessionEntry,
           })
         : params.sessionEntry;
+      const metadataPreservingSessionEntry = preserveConcurrentReplySessionRunMetadata({
+        ...(currentEntry ? { currentEntry } : {}),
+        sessionEntry: preparedSessionEntry,
+      });
       const sessionEntry = resolveInitializedReplySessionEntry({
         agentId: params.agentId,
         ...(currentEntry ? { currentEntry } : {}),
         fallbackSessionFile: params.fallbackSessionFile,
-        sessionEntry: preparedSessionEntry,
+        sessionEntry: metadataPreservingSessionEntry,
         storePath: params.storePath,
       });
       store[resolved.normalizedKey] = sessionEntry;

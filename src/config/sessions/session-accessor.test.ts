@@ -485,6 +485,138 @@ describe("session accessor file-backed seam", () => {
     });
   });
 
+  it("allows reply session initialization while preserving concurrent run metadata", async () => {
+    const sessionKey = "agent:main:main";
+    const buildPromptReport = (
+      generatedAt: number,
+      model: string,
+    ): NonNullable<SessionEntry["systemPromptReport"]> => ({
+      source: "run",
+      generatedAt,
+      sessionId: "existing-session",
+      sessionKey,
+      provider: "xai",
+      model,
+      systemPrompt: {
+        chars: 10,
+        projectContextChars: 4,
+        nonProjectContextChars: 6,
+      },
+      injectedWorkspaceFiles: [],
+      skills: {
+        promptChars: 5,
+        entries: [],
+      },
+      tools: {
+        listChars: 3,
+        schemaChars: 2,
+        entries: [],
+      },
+    });
+    await upsertSessionEntry(
+      { sessionKey, storePath },
+      {
+        sessionFile: transcriptPath,
+        sessionId: "existing-session",
+        updatedAt: 10,
+        lastInteractionAt: 9,
+        status: "done",
+        startedAt: 100,
+        endedAt: 180,
+        runtimeMs: 80,
+        abortedLastRun: false,
+        inputTokens: 10,
+        outputTokens: 5,
+        totalTokens: 15,
+        totalTokensFresh: true,
+        cacheRead: 1,
+        cacheWrite: 0,
+        estimatedCostUsd: 0.01,
+        modelProvider: "xai",
+        model: "grok-4.2",
+        contextTokens: 900_000,
+        skillsSnapshot: {
+          prompt: "old prompt",
+          skills: [{ name: "old-skill" }],
+          version: 1,
+        },
+        systemPromptReport: buildPromptReport(11, "grok-4.2"),
+      },
+    );
+
+    const snapshot = loadReplySessionInitializationSnapshot({ sessionKey, storePath });
+    await updateSessionEntry({ sessionKey, storePath }, () => ({
+      updatedAt: 20,
+      lastInteractionAt: 19,
+      status: "running",
+      startedAt: 200,
+      endedAt: undefined,
+      runtimeMs: undefined,
+      abortedLastRun: false,
+      inputTokens: 30,
+      outputTokens: 7,
+      totalTokens: 37,
+      totalTokensFresh: true,
+      cacheRead: 4,
+      cacheWrite: 1,
+      estimatedCostUsd: 0.02,
+      modelProvider: "xai",
+      model: "grok-4.3",
+      contextTokens: 1_000_000,
+      skillsSnapshot: {
+        prompt: "new prompt",
+        skills: [{ name: "new-skill" }],
+        version: 1,
+      },
+      systemPromptReport: buildPromptReport(22, "grok-4.3"),
+    }));
+
+    const committed = await commitReplySessionInitialization({
+      activeSessionKey: sessionKey,
+      agentId: "main",
+      expectedRevision: snapshot.revision,
+      previousEntry: snapshot.currentEntry,
+      sessionEntry: {
+        ...snapshot.currentEntry,
+        sessionFile: snapshot.currentEntry?.sessionFile,
+        sessionId: "existing-session",
+        updatedAt: 30,
+        lastInteractionAt: 25,
+      },
+      sessionKey,
+      storePath,
+    });
+
+    expect(committed.ok).toBe(true);
+    if (!committed.ok) {
+      throw new Error("expected reply session initialization to commit");
+    }
+    expect(committed.sessionEntry).toMatchObject({
+      sessionId: "existing-session",
+      updatedAt: 30,
+      lastInteractionAt: 25,
+      status: "running",
+      startedAt: 200,
+      inputTokens: 30,
+      outputTokens: 7,
+      totalTokens: 37,
+      cacheRead: 4,
+      cacheWrite: 1,
+      estimatedCostUsd: 0.02,
+      modelProvider: "xai",
+      model: "grok-4.3",
+      contextTokens: 1_000_000,
+      skillsSnapshot: {
+        prompt: "new prompt",
+        skills: [{ name: "new-skill" }],
+      },
+      systemPromptReport: expect.objectContaining({
+        generatedAt: 22,
+        model: "grok-4.3",
+      }),
+    });
+  });
+
   it("can borrow cached entry objects for read-only hot paths", async () => {
     const scope = {
       clone: false,
