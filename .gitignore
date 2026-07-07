@@ -236,6 +236,7 @@ docs/.generated/*.jsonl
 changelog/fragments/
 
 # Local scratch workspace
+.worktrees/
 .tmp/
 .cache/
 .pytest_cache/
