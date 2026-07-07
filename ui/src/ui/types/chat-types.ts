@@ -49,6 +49,11 @@ export type MessageContentItem =
       type: "canvas";
       preview: Extract<NonNullable<ToolCard["preview"]>, { kind: "canvas" }>;
       rawText?: string | null;
+    }
+  | {
+      type: "mail_draft_approval";
+      label: string;
+      confirmation: string;
     };
 
 /** Normalized message structure for rendering */

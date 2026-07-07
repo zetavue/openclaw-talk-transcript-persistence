@@ -29,6 +29,7 @@ import { syncTelegramMenuCommands } from "./bot-native-command-menu.js";
 import { deliverReplies, emitInternalMessageSentHook } from "./bot/delivery.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
 import { resolveTelegramExecApproval } from "./exec-approval-resolver.js";
+import { sendTelegramMailApprovalCallback } from "./mail-approval-callback.js";
 import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
 import { editMessageTelegram } from "./send.js";
 import { wasSentByBot } from "./sent-message-cache.js";
@@ -55,6 +56,7 @@ export type TelegramBotDeps = {
   syncTelegramMenuCommands?: typeof syncTelegramMenuCommands;
   wasSentByBot: typeof wasSentByBot;
   resolveExecApproval?: typeof resolveTelegramExecApproval;
+  sendMailApprovalCallback?: typeof sendTelegramMailApprovalCallback;
   createTelegramDraftStream?: typeof createTelegramDraftStream;
   deliverReplies?: typeof deliverReplies;
   deliverInboundReplyWithMessageSendContext?: typeof deliverInboundReplyWithMessageSendContext;
@@ -127,6 +129,9 @@ export const defaultTelegramBotDeps: TelegramBotDeps = {
   },
   get resolveExecApproval() {
     return resolveTelegramExecApproval;
+  },
+  get sendMailApprovalCallback() {
+    return sendTelegramMailApprovalCallback;
   },
   get createTelegramDraftStream() {
     return createTelegramDraftStream;

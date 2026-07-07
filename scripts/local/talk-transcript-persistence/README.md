@@ -23,6 +23,9 @@ Git-managed local OpenClaw source tree when source-level local fixes are missing
 - Telegram visible-reply dedupe: suppresses repeated visible Telegram replies
   within the same inbound Telegram turn, covering the bot streaming/final
   delivery path that does not always go through the generic send tool.
+- Telegram Mail Layer approval callback: source-backed deterministic handling
+  for `Senden freigeben: Action <id>` button callbacks, so the button invokes
+  Mail Layer send directly instead of relying on the model to run the send tool.
 - Telegram ingress watchdog: source-backed restart guard for isolated Telegram
   polling when unattempted `pending` spool updates age out with no active spool
   handler, which recovers dispatcher stalls after network/suspend issues.
@@ -79,6 +82,7 @@ openclaw-talk-transcript-guard: PASS: telegram-outbound-dedupe markers already p
 openclaw-talk-transcript-guard: PASS: telegram-context-dedupe markers already present
 openclaw-talk-transcript-guard: PASS: telegram-delivery-mirror-dedupe markers already present
 openclaw-talk-transcript-guard: PASS: telegram-visible-reply-dedupe markers already present
+openclaw-talk-transcript-guard: PASS: telegram-mail-approval-callback markers already present
 openclaw-talk-transcript-guard: PASS: voice-command-guard markers already present
 openclaw-talk-transcript-guard: PASS: mail-action-claim-guard markers already present
 openclaw-talk-transcript-guard: PASS: structured-mail-create-draft-tool markers already present

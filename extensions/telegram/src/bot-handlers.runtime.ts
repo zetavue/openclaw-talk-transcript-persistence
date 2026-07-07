@@ -135,6 +135,7 @@ import {
 } from "./ingress.js";
 import { resolveTelegramInlineButtonsScope } from "./inline-buttons.js";
 import { dispatchTelegramPluginInteractiveHandler } from "./interactive-dispatch.js";
+import { sendTelegramMailApprovalCallback } from "./mail-approval-callback.js";
 import {
   buildTelegramConversationContext,
   buildTelegramReplyChain,
@@ -2513,6 +2514,28 @@ export const registerTelegramHandlers = ({
         return;
       }
       const runtimeCfg = telegramDeps.getRuntimeConfig();
+      const mailApprovalCallback = await (
+        telegramDeps.sendMailApprovalCallback ?? sendTelegramMailApprovalCallback
+      )({
+        data,
+      });
+      if (mailApprovalCallback.handled) {
+        if (mailApprovalCallback.ok) {
+          try {
+            await clearCallbackButtons();
+          } catch (editErr) {
+            const errStr = String(editErr);
+            if (
+              !errStr.includes("message is not modified") &&
+              !errStr.includes("there is no text in the message to edit")
+            ) {
+              logVerbose(`telegram: failed to clear mail approval callback buttons: ${errStr}`);
+            }
+          }
+        }
+        await replyToCallbackChat(mailApprovalCallback.text);
+        return;
+      }
       const pluginCallback = await dispatchTelegramPluginInteractiveHandler({
         data: pluginCallbackData,
         callbackId: callback.id,

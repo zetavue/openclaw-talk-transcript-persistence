@@ -524,7 +524,12 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
           : `${toolLabels.slice(0, 2).join(", ")} +${toolLabels.length - 2} more`;
     const hasError = cards.some(isToolCardError);
     const hasMailDraftApproval =
-      Boolean(opts.onSendMailDraftApproval) && cards.some(resolveMailDraftApprovalAction);
+      Boolean(opts.onSendMailDraftApproval) &&
+      group.messages.some(
+        (item) =>
+          !hasLiftedMailDraftApproval(item.message) &&
+          extractToolCardsCached(item.message, item.key).some(resolveMailDraftApprovalAction),
+      );
     const activityDisclosureId = `activity:${group.key}`;
     const activityExpanded =
       opts.isToolMessageExpanded?.(activityDisclosureId) ?? (hasError || hasMailDraftApproval);
@@ -1525,6 +1530,70 @@ function renderInlineToolCards(
   `;
 }
 
+function findMailDraftApprovalAction(toolCards: ToolCard[]) {
+  for (const card of toolCards) {
+    const action = resolveMailDraftApprovalAction(card);
+    if (action) {
+      return action;
+    }
+  }
+  return undefined;
+}
+
+function findMailDraftApprovalActionFromContent(
+  content: NormalizedMessage["content"],
+): ReturnType<typeof resolveMailDraftApprovalAction> {
+  const block = content.find(
+    (item): item is Extract<MessageContentItem, { type: "mail_draft_approval" }> =>
+      item.type === "mail_draft_approval",
+  );
+  if (!block) {
+    return undefined;
+  }
+  return {
+    label: block.label,
+    confirmation: block.confirmation,
+  };
+}
+
+function hasLiftedMailDraftApproval(message: unknown): boolean {
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    return false;
+  }
+  const meta = (message as Record<string, unknown>)["__openclaw"];
+  return (
+    Boolean(meta) &&
+    typeof meta === "object" &&
+    !Array.isArray(meta) &&
+    (meta as Record<string, unknown>).mailDraftApprovalLifted === true
+  );
+}
+
+function renderMailDraftApprovalButton(
+  action: ReturnType<typeof resolveMailDraftApprovalAction>,
+  onSendMailDraftApproval?: MailDraftApprovalHandler,
+) {
+  if (!action || !onSendMailDraftApproval) {
+    return nothing;
+  }
+  return html`
+    <div class="chat-tool-card__mail-approval chat-mail-draft-approval">
+      <button
+        class="chat-tool-card__mail-approval-btn"
+        type="button"
+        title="E-Mail senden freigeben"
+        @click=${(event: Event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          void onSendMailDraftApproval(action.confirmation);
+        }}
+      >
+        ${action.label}
+      </button>
+    </div>
+  `;
+}
+
 /**
  * Max characters for auto-detecting and pretty-printing JSON.
  * Prevents DoS from large JSON payloads in assistant/tool messages.
@@ -1642,7 +1711,9 @@ function renderGroupedMessage(
     typeof m.toolCallId === "string" ||
     typeof m.tool_call_id === "string";
 
-  const toolCards = (opts.showToolCalls ?? true) ? extractToolCardsCached(message, messageKey) : [];
+  const shouldExtractToolCards =
+    (opts.showToolCalls ?? true) || Boolean(opts.onSendMailDraftApproval);
+  const toolCards = shouldExtractToolCards ? extractToolCardsCached(message, messageKey) : [];
   const hasToolCards = toolCards.length > 0;
   const imageRenderOptions = {
     localMediaPreviewRoots: opts.localMediaPreviewRoots ?? [],
@@ -1711,11 +1782,34 @@ function renderGroupedMessage(
     .filter(Boolean)
     .join(" ");
 
-  // Suppress empty bubbles when tool cards are the only content and toggle is off
-  const visibleToolCards = hasToolCards && (opts.showToolCalls ?? true);
+  const mailDraftApprovalLifted = hasLiftedMailDraftApproval(message);
+  const contentMailDraftApprovalAction = opts.onSendMailDraftApproval
+    ? findMailDraftApprovalActionFromContent(normalizedMessage.content)
+    : undefined;
+  const toolMailDraftApprovalAction =
+    opts.onSendMailDraftApproval && !mailDraftApprovalLifted
+      ? findMailDraftApprovalAction(toolCards)
+      : undefined;
+  const mailDraftApprovalAction = contentMailDraftApprovalAction ?? toolMailDraftApprovalAction;
+  const hasMailDraftApproval = Boolean(mailDraftApprovalAction);
+  const renderStandaloneMailDraftApproval =
+    !isToolMessage &&
+    normalizedRole === "assistant" &&
+    Boolean(mailDraftApprovalAction) &&
+    (Boolean(markdown) || Boolean(contentMailDraftApprovalAction));
+  // Suppress empty bubbles when tool cards are the only content and toggle is off,
+  // but keep mail approval controls visible because they are user actions.
+  const visibleToolCards =
+    hasToolCards &&
+    ((opts.showToolCalls ?? true) || (hasMailDraftApproval && !renderStandaloneMailDraftApproval));
+  const toolCardMailApprovalHandler =
+    renderStandaloneMailDraftApproval || mailDraftApprovalLifted
+      ? undefined
+      : opts.onSendMailDraftApproval;
   if (
     !markdown &&
     !visibleToolCards &&
+    !renderStandaloneMailDraftApproval &&
     !hasImages &&
     visibleAttachments.length === 0 &&
     assistantViewBlocks.length === 0 &&
@@ -1724,8 +1818,6 @@ function renderGroupedMessage(
     return nothing;
   }
 
-  const hasMailDraftApproval =
-    Boolean(opts.onSendMailDraftApproval) && toolCards.some(resolveMailDraftApprovalAction);
   const toolMessageDisclosureId = `toolmsg:${messageKey}`;
   const toolMessageExpanded =
     opts.isToolMessageExpanded?.(toolMessageDisclosureId) ?? hasMailDraftApproval;
@@ -1849,7 +1941,7 @@ function renderGroupedMessage(
                         : markdown
                           ? renderMarkdownText(markdown, opts.isStreaming, markdownRenderOptions)
                           : nothing}
-                      ${hasToolCards
+                      ${visibleToolCards
                         ? singleToolCard && !markdown && !hasImages
                           ? renderExpandedToolCardContent(
                               singleToolCard,
@@ -1858,14 +1950,14 @@ function renderGroupedMessage(
                               opts.canvasPluginSurfaceUrl,
                               opts.embedSandboxMode ?? "scripts",
                               opts.allowExternalEmbedUrls ?? false,
-                              opts.onSendMailDraftApproval,
+                              toolCardMailApprovalHandler,
                             )
                           : renderInlineToolCards(toolCards, {
                               messageKey,
                               sessionKey: opts.sessionKey,
                               agentId: opts.agentId,
                               onOpenSidebar,
-                              onSendMailDraftApproval: opts.onSendMailDraftApproval,
+                              onSendMailDraftApproval: toolCardMailApprovalHandler,
                               isToolExpanded: opts.isToolExpanded,
                               onToggleToolExpanded: opts.onToggleToolExpanded,
                               canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
@@ -1914,13 +2006,16 @@ function renderGroupedMessage(
               : markdown
                 ? renderMarkdownText(markdown, opts.isStreaming, markdownRenderOptions)
                 : nothing}
-            ${hasToolCards
+            ${renderStandaloneMailDraftApproval
+              ? renderMailDraftApprovalButton(mailDraftApprovalAction, opts.onSendMailDraftApproval)
+              : nothing}
+            ${visibleToolCards
               ? renderInlineToolCards(toolCards, {
                   messageKey,
                   sessionKey: opts.sessionKey,
                   agentId: opts.agentId,
                   onOpenSidebar,
-                  onSendMailDraftApproval: opts.onSendMailDraftApproval,
+                  onSendMailDraftApproval: toolCardMailApprovalHandler,
                   isToolExpanded: opts.isToolExpanded,
                   onToggleToolExpanded: opts.onToggleToolExpanded,
                   canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,

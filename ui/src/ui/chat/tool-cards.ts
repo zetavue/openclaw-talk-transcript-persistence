@@ -99,6 +99,7 @@ function readToolErrorFlag(value: Record<string, unknown>): boolean | undefined 
 const TOOL_NOT_FOUND_PATTERN = /^tool not found\.?$/i;
 const MAX_ERROR_DETECT_CHARS = 20_000;
 const TOOL_ERROR_STATUSES = new Set(["error", "failed", "timeout"]);
+const LEGACY_MAIL_DRAFT_TOOL_NAMES = new Set(["bash", "exec", "process"]);
 
 function hasToolErrorStatus(value: unknown): boolean {
   return typeof value === "string" && TOOL_ERROR_STATUSES.has(value.trim().toLowerCase());
@@ -216,11 +217,72 @@ function resolveMailDraftApprovalFromButtons(
   return undefined;
 }
 
+function parseKeyValueOutput(text: string | undefined): Map<string, string> {
+  const fields = new Map<string, string>();
+  for (const line of text?.split(/\r?\n/) ?? []) {
+    const index = line.indexOf("=");
+    if (index <= 0) {
+      continue;
+    }
+    fields.set(line.slice(0, index).trim(), line.slice(index + 1).trim());
+  }
+  return fields;
+}
+
+function extractMailDraftActionId(confirmation: string): number | undefined {
+  const match = /^Senden freigeben: Action (\d+)$/u.exec(confirmation.trim());
+  if (!match) {
+    return undefined;
+  }
+  const actionId = Number(match[1]);
+  return Number.isSafeInteger(actionId) && actionId > 0 ? actionId : undefined;
+}
+
+function hasMatchingMailDraftPath(fields: Map<string, string>, actionId: number): boolean {
+  const paddedActionId = String(actionId).padStart(6, "0");
+  const pathValues = ["draft", "draft_md", "draft_html", "draft_eml"]
+    .map((field) => fields.get(field))
+    .filter((value): value is string => Boolean(value));
+  return pathValues.some((value) => {
+    const normalized = value.replace(/\\/g, "/");
+    return (
+      normalized.includes(`/workspace-mail/drafts/${paddedActionId}-`) ||
+      normalized.includes(`/drafts/${paddedActionId}-`)
+    );
+  });
+}
+
+function resolveLegacyMailDraftApprovalAction(card: ToolCard): MailDraftApprovalAction | undefined {
+  if (!LEGACY_MAIL_DRAFT_TOOL_NAMES.has(card.name.trim().toLowerCase())) {
+    return undefined;
+  }
+  const fields = parseKeyValueOutput(card.outputText);
+  const actionIdRaw = fields.get("action_id");
+  const shortApproval = fields.get("short_approval");
+  if (!actionIdRaw || !shortApproval) {
+    return undefined;
+  }
+  const actionId = Number(actionIdRaw);
+  const approvalActionId = extractMailDraftActionId(shortApproval);
+  if (
+    !Number.isSafeInteger(actionId) ||
+    actionId <= 0 ||
+    approvalActionId !== actionId ||
+    !hasMatchingMailDraftPath(fields, actionId)
+  ) {
+    return undefined;
+  }
+  return normalizeMailDraftApprovalAction("Senden freigeben", shortApproval);
+}
+
 export function resolveMailDraftApprovalAction(
   card: ToolCard,
 ): MailDraftApprovalAction | undefined {
-  if (card.name !== "mail_create_draft" || isToolCardError(card)) {
+  if (isToolCardError(card)) {
     return undefined;
+  }
+  if (card.name !== "mail_create_draft") {
+    return resolveLegacyMailDraftApprovalAction(card);
   }
   const output = parseJsonObject(card.outputText);
   if (!output) {

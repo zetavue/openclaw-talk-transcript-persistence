@@ -592,6 +592,80 @@ describe("createTelegramBot", () => {
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-group-1");
   });
 
+  it("handles mail approval callbacks deterministically before agent reply pipeline", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+    sendMessageSpy.mockClear();
+    editMessageReplyMarkupSpy.mockClear();
+
+    const sendMailApprovalCallback = vi.fn(async () => ({
+      handled: true as const,
+      ok: true as const,
+      actionId: 131,
+      confirmation: "Senden freigeben: Action 131",
+      text: "Mail Action 131 wurde gesendet.\n\nsent=true",
+      stdout: "sent=true",
+    }));
+    (
+      telegramBotDepsForTest as typeof telegramBotDepsForTest & {
+        sendMailApprovalCallback?: typeof sendMailApprovalCallback;
+      }
+    ).sendMailApprovalCallback = sendMailApprovalCallback;
+
+    try {
+      createTelegramBot({
+        token: "tok",
+        config: {
+          channels: {
+            telegram: {
+              dmPolicy: "open",
+              capabilities: { inlineButtons: "dm" },
+              allowFrom: ["*"],
+            },
+          },
+        },
+      });
+      const callbackHandler = getOnHandler("callback_query") as (
+        ctx: Record<string, unknown>,
+      ) => Promise<void>;
+
+      await callbackHandler({
+        callbackQuery: {
+          id: "cbq-mail-approval",
+          data: "Senden freigeben: Action 131",
+          from: { id: 9, first_name: "Ada", username: "ada_bot" },
+          message: {
+            chat: { id: 1234, type: "private" },
+            date: 1736380800,
+            message_id: 31,
+            text: "Freigabe: Senden freigeben: Action 131",
+          },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      });
+
+      expect(sendMailApprovalCallback).toHaveBeenCalledWith({
+        data: "Senden freigeben: Action 131",
+      });
+      expect(editMessageReplyMarkupSpy).toHaveBeenCalledWith(1234, 31, {
+        reply_markup: { inline_keyboard: [] },
+      });
+      expect(sendMessageSpy).toHaveBeenCalledWith(
+        1234,
+        expect.stringContaining("sent=true"),
+        undefined,
+      );
+      expect(replySpy).not.toHaveBeenCalled();
+    } finally {
+      delete (
+        telegramBotDepsForTest as typeof telegramBotDepsForTest & {
+          sendMailApprovalCallback?: typeof sendMailApprovalCallback;
+        }
+      ).sendMailApprovalCallback;
+    }
+  });
+
   it("clears approval buttons without re-editing callback message text", async () => {
     onSpy.mockClear();
     editMessageReplyMarkupSpy.mockClear();

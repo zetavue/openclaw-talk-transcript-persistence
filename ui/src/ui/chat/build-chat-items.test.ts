@@ -987,6 +987,54 @@ describe("buildChatItems", () => {
     ).toBe(true);
   });
 
+  it("attaches lifted mail draft approvals to the nearest assistant draft turn", () => {
+    const groups = messageGroups({
+      showToolCalls: false,
+      messages: [
+        {
+          id: "assistant-mail-draft",
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "ENTWURF - NICHT AUTOMATISCH SENDEN\n\nSehr geehrte Frau Muster,\n\nvielen Dank.",
+            },
+          ],
+          timestamp: 2_000,
+        },
+      ],
+      toolMessages: [
+        {
+          id: "tool-mail-draft",
+          role: "tool",
+          toolCallId: "call-mail-draft",
+          toolName: "mail_create_draft",
+          content: JSON.stringify({
+            ok: true,
+            action_id: 95,
+            short_approval: "Senden freigeben: Action 95",
+            send_buttons: [
+              [
+                {
+                  text: "Senden freigeben",
+                  callback_data: "Senden freigeben: Action 95",
+                  style: "success",
+                },
+              ],
+            ],
+          }),
+          timestamp: 1_999,
+        },
+      ],
+    });
+
+    expect(firstMessageContent(groups[0])).toContainEqual({
+      type: "mail_draft_approval",
+      label: "Senden freigeben",
+      confirmation: "Senden freigeben: Action 95",
+    });
+  });
+
   it("does not lift generic view handles from non-canvas payloads", () => {
     const groups = messageGroups({
       messages: [

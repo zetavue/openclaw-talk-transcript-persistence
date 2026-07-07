@@ -68,6 +68,12 @@ TELEGRAM_VISIBLE_REPLY_MARKERS = (
     "function buildOpenClawLocalTelegramVisibleReplyDedupeKey(params)",
     "rememberOpenClawLocalTelegramVisibleReply(visibleReplyDedupeKey)",
 )
+TELEGRAM_MAIL_APPROVAL_CALLBACK_MARKERS = (
+    "MAIL_APPROVAL_CALLBACK_PATTERN",
+    "sendTelegramMailApprovalCallback",
+    "parseTelegramMailApprovalCallback",
+    '"--confirmation"',
+)
 PROVIDER_MEDIA_REF_HINT_MARKERS = (
     'const OPENCLAW_LOCAL_PROVIDER_MEDIA_REF_HINT_MARKER = "openclaw-local-provider-media-ref-hint-v1";',
     "function normalizePromptMediaLocator(value)",
@@ -724,6 +730,16 @@ def main() -> int:
     patch_bundle(telegram_context_bundle, TELEGRAM_CONTEXT_MARKERS, patch_telegram_context_text, "telegram-context-dedupe")
     patch_bundle(telegram_context_bundle, TELEGRAM_MIRROR_MARKERS, patch_telegram_delivery_mirror_text, "telegram-delivery-mirror-dedupe")
     patch_bundle(telegram_context_bundle, TELEGRAM_VISIBLE_REPLY_MARKERS, patch_telegram_visible_reply_text, "telegram-visible-reply-dedupe")
+    telegram_mail_approval_callback_bundle = find_source_backed_dist_bundle(
+        "telegram-mail-approval-callback",
+        TELEGRAM_MAIL_APPROVAL_CALLBACK_MARKERS,
+    )
+    patch_bundle(
+        telegram_mail_approval_callback_bundle,
+        TELEGRAM_MAIL_APPROVAL_CALLBACK_MARKERS,
+        lambda text: text,
+        "telegram-mail-approval-callback",
+    )
     voice_command_guard_bundle = find_source_backed_dist_bundle(
         "voice-command-guard",
         VOICE_COMMAND_GUARD_MARKERS,
