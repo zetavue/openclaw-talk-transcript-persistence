@@ -253,7 +253,7 @@ describe("evaluateMailDraftRisk", () => {
 
 ```bash
 cd /home/openclaw/src/openclaw
-node scripts/run-vitest.mjs run --config test/vitest/vitest.unit-fast.config.ts src/agents/tools/mail-draft-risk.test.ts
+node scripts/run-vitest.mjs run --config test/vitest/vitest.agents-tools.config.ts src/agents/tools/mail-draft-risk.test.ts
 ```
 
 Expected result: the new risk test file passes.
@@ -371,7 +371,7 @@ Add cases:
 
 ```bash
 cd /home/openclaw/src/openclaw
-node scripts/run-vitest.mjs run --config test/vitest/vitest.unit-fast.config.ts src/agents/tools/mail-draft-risk.test.ts src/agents/tools/mail-draft-tool.test.ts
+node scripts/run-vitest.mjs run --config test/vitest/vitest.agents-tools.config.ts src/agents/tools/mail-draft-risk.test.ts src/agents/tools/mail-draft-tool.test.ts
 ```
 
 Expected result: both test files pass.
@@ -713,7 +713,7 @@ Expected result: each updated skill contains the new rules.
 
 ```bash
 cd /home/openclaw/src/openclaw
-node scripts/run-vitest.mjs run --config test/vitest/vitest.unit-fast.config.ts src/agents/tools/mail-draft-risk.test.ts src/agents/tools/mail-draft-tool.test.ts
+node scripts/run-vitest.mjs run --config test/vitest/vitest.agents-tools.config.ts src/agents/tools/mail-draft-risk.test.ts src/agents/tools/mail-draft-tool.test.ts
 ```
 
 Expected result: all targeted TypeScript tests pass.
