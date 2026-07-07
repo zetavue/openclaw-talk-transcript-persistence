@@ -49,6 +49,23 @@ function defaultMailWorkspaceDir(): string {
   return path.join(openclawHome, "workspace-mail");
 }
 
+function execStdoutToString(execResult: unknown): string {
+  if (typeof execResult === "string") {
+    return execResult;
+  }
+  const stdout = (execResult as { stdout?: unknown }).stdout;
+  if (typeof stdout === "string") {
+    return stdout;
+  }
+  if (Buffer.isBuffer(stdout)) {
+    return stdout.toString("utf8");
+  }
+  if (stdout instanceof Uint8Array) {
+    return Buffer.from(stdout).toString("utf8");
+  }
+  return String(stdout ?? "");
+}
+
 function parseCreateDraftOutput(stdout: string): MailCreateDraftReceipt {
   const fields = new Map<string, string>();
   for (const line of stdout.split(/\r?\n/)) {
@@ -404,12 +421,7 @@ export function createMailCreateDraftTool(options?: { mailWorkspaceDir?: string 
           timeout: 120_000,
           maxBuffer: 512 * 1024,
         });
-        const stdout =
-          typeof execResult === "string"
-            ? execResult
-            : typeof execResult.stdout === "string"
-              ? execResult.stdout
-              : execResult.stdout.toString("utf8");
+        const stdout = execStdoutToString(execResult);
         return jsonResult({
           ...parseCreateDraftOutput(stdout),
           recipient,
@@ -480,12 +492,7 @@ export function createMailRegisterDraftSendTool(options?: {
             maxBuffer: 1024 * 1024,
           },
         );
-        const stdout =
-          typeof execResult === "string"
-            ? execResult
-            : typeof execResult.stdout === "string"
-              ? execResult.stdout
-              : execResult.stdout.toString("utf8");
+        const stdout = execStdoutToString(execResult);
         return jsonResult(parseRegisterDraftSendOutput(stdout));
       } catch (error) {
         return jsonResult(

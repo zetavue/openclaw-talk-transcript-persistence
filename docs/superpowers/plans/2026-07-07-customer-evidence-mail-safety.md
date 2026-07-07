@@ -382,13 +382,13 @@ Expected result: both test files pass.
 
 ## Task 3: Add Send-Time Safety In Mail Layer
 
-- [ ] Edit `/home/openclaw/.openclaw/workspace-mail/scripts/mail_layer.py`.
+- [x] Edit `/home/openclaw/.openclaw/workspace-mail/scripts/mail_layer.py`.
 
 Add helper functions after `action_attachment_paths(action)`:
 
 ```python
 ATTACHMENT_PROMISE_RE = re.compile(
-    r"\b(?:anhang|angeh[aä]ngt|beigef[uü]gt|beilage|anbei|im anhang|attached|attachment|pdf|datei|angebot liegt bei)\b",
+    r"\b(?:anhang|angeh[aä]ngt(?:e[nsrm]?)?|beigef[uü]gt(?:e[nsrm]?)?|beilage|anbei|im anhang|attached|attachment|pdf|datei|dokument(?:e[nsrm]?)?|unterlagen|angebot liegt bei)\b",
     re.IGNORECASE,
 )
 
@@ -431,7 +431,7 @@ def require_no_send_risk(action, body):
     return issues
 ```
 
-- [ ] Call `require_no_send_risk` in `send_smtp_message` immediately after `ensure_send_allowed` and before `validate_outgoing_body(body)`.
+- [x] Call `require_no_send_risk` in `send_smtp_message` immediately after `ensure_send_allowed`, and again after signature/reply-quote assembly on the combined final body before the provider call.
 
 Implementation:
 
@@ -442,26 +442,85 @@ Implementation:
     validate_outgoing_body(body)
 ```
 
-- [ ] Also call it in `send_smtp.py` dry-run path after `require_send_approval`, so dry-run exposes the same safety failure.
+Final-body check:
+
+```python
+    signed_body = build_signed_email_body(...)
+    require_no_send_risk(
+        action,
+        "\n".join(
+            part
+            for part in (body, signed_body.get("plain"), signed_body.get("html"))
+            if part
+        ),
+    )
+```
+
+- [x] Add `validate_send_confirmation` in `mail_layer.py`, so CLIs can validate the exact approval phrase without mutating the action state.
 
 Implementation:
 
 ```python
-        action = require_send_approval(
+def validate_send_confirmation(*, db_path=DEFAULT_DB, action_id, confirmation):
+    init_db(db_path)
+    with connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT * FROM mail_actions WHERE id = ?", (action_id,)
+        ).fetchone()
+        if row is None:
+            raise MailLayerError(f"mail action not found: {action_id}")
+        expected = confirm_phrase(row["subject"] or "")
+        short_expected = short_confirm_phrase(action_id)
+        if confirmation.strip() not in {expected, short_expected}:
+            raise MailLayerError(
+                "approval rejected; expected exactly one of: "
+                f"{short_expected} OR {expected}"
+            )
+        return row_to_dict(row)
+```
+
+`require_send_approval` now calls `validate_send_confirmation` first, then writes `approved_by_user=1,status='approved'`.
+
+- [x] Also call the risk check in `send_smtp.py` before `require_send_approval`, so blocked dry-runs expose the same safety failure without changing the action to approved.
+
+Implementation:
+
+```python
+        action = validate_send_confirmation(
             db_path=args.db,
             action_id=args.action_id,
             confirmation=args.confirmation,
         )
         require_no_send_risk(action, body)
+        signed_body = build_signed_email_body(
+            body,
+            action["account"],
+            accounts_path=args.accounts,
+        )
+        require_no_send_risk(
+            action,
+            "\n".join(
+                part
+                for part in (body, signed_body.get("plain"), signed_body.get("html"))
+                if part
+            ),
+        )
+        require_send_approval(
+            db_path=args.db,
+            action_id=args.action_id,
+            confirmation=args.confirmation,
+        )
 ```
 
 Update imports:
 
 ```python
     require_no_send_risk,
+    validate_send_confirmation,
+    build_signed_email_body,
 ```
 
-- [ ] Apply the same send-time risk check to `send_graph_approved.py`, because Microsoft Graph is another approved send path using the same Mail Layer actions.
+- [x] Apply the same send-time risk check and body validation parity to `send_graph_approved.py`, because Microsoft Graph is another approved send path using the same Mail Layer actions.
 
 Implementation:
 
@@ -469,6 +528,7 @@ Implementation:
 from mail_layer import (
     DEFAULT_ACCOUNTS,
     DEFAULT_DB,
+    DEFAULT_DRAFTS,
     MailLayerError,
     action_attachment_paths,
     build_signed_email_body,
@@ -478,8 +538,38 @@ from mail_layer import (
     mark_sent,
     require_no_send_risk,
     require_send_approval,
+    resolve_action_body,
+    validate_send_confirmation,
+    validate_outgoing_body,
 )
 
+        body = resolve_action_body(
+            db_path=args.db,
+            action_id=args.action_id,
+            body_file=args.body_file,
+            drafts_dir=args.drafts_dir,
+        )
+        validate_outgoing_body(body)
+        action = validate_send_confirmation(
+            db_path=args.db,
+            action_id=args.action_id,
+            confirmation=args.confirmation,
+        )
+        require_no_send_risk(action, body)
+        account = get_account(action["account"], args.accounts)
+        signed_body = build_signed_email_body(
+            body,
+            action["account"],
+            accounts_path=args.accounts,
+        )
+        require_no_send_risk(
+            action,
+            "\n".join(
+                part
+                for part in (body, signed_body.get("plain"), signed_body.get("html"))
+                if part
+            ),
+        )
         action = require_send_approval(
             db_path=args.db,
             action_id=args.action_id,
@@ -487,15 +577,43 @@ from mail_layer import (
         )
         with connect(args.db) as conn:
             ensure_send_allowed(conn, args.action_id)
-        body = Path(args.body_file).read_text(encoding="utf-8")
-        require_no_send_risk(action, body)
         if args.dry_run:
             print("approved=true")
             print("dry_run=true")
             return 0
 ```
 
-- [ ] Extend `/home/openclaw/.openclaw/workspace-mail/tests/test_mail_layer.py` using its existing DB fixture style.
+- [x] Add atomic provider-send claim to close the duplicate-send race.
+
+Implementation:
+
+```python
+def claim_send_action(db_path=DEFAULT_DB, action_id=None):
+    with connect(db_path) as conn:
+        row = ensure_send_allowed(conn, action_id)
+        updated = conn.execute(
+            """
+            UPDATE mail_actions
+            SET status = 'sending'
+            WHERE id = ?
+              AND status = 'approved'
+              AND approved_by_user = 1
+              AND NOT EXISTS (
+                SELECT 1 FROM send_log WHERE send_log.action_hash = ?
+              )
+            """,
+            (action_id, row["action_hash"]),
+        ).rowcount
+        if updated != 1:
+            raise MailLayerError("send rejected; action is already sending or sent")
+    return get_action(db_path, action_id)
+```
+
+SMTP and Graph call `claim_send_action` immediately before the external provider send. `mark_sent` accepts `approved` or `sending`, then writes `sent`.
+
+If the external provider call fails after the action is claimed, the action is moved to `send_failed`. A later exact approval phrase can move `send_failed` back to `approved` for an explicit retry; `sending` cannot be overwritten by a concurrent approval call.
+
+- [x] Extend `/home/openclaw/.openclaw/workspace-mail/tests/test_mail_layer.py` using its existing DB fixture style.
 
 Add tests that:
 
@@ -504,7 +622,7 @@ Add tests that:
 3. Assert `require_no_send_risk(action, body)` raises `MailLayerError` containing `no attachments_json`.
 4. Repeat with a temp PDF path encoded in `attachments_json` and assert no exception.
 
-- [ ] Extend `/home/openclaw/.openclaw/workspace-mail/tests/test_send_smtp_cli.py`.
+- [x] Extend `/home/openclaw/.openclaw/workspace-mail/tests/test_send_smtp_cli.py`.
 
 Add a dry-run test that creates an approved action with no attachments and a body promising a PDF, then runs:
 
@@ -533,18 +651,26 @@ Expected process result:
 - exit code `1`
 - stderr contains `send blocked`
 - stdout does not contain `approved=true`
+- DB action remains `status='pending'` and `approved_by_user=0`
 
-- [ ] Extend `/home/openclaw/.openclaw/workspace-mail/tests/test_send_graph_approved_cli.py`.
+- [x] Extend `/home/openclaw/.openclaw/workspace-mail/tests/test_send_graph_approved_cli.py`.
 
-Add a dry-run test that creates an approved Graph action with no attachments and a body promising a PDF, then runs `send_graph_approved.main([... "--dry-run" ...])`.
+Add a dry-run test that creates a pending Graph action with no attachments and a body promising a PDF, then runs `send_graph_approved.main([... "--dry-run" ...])`.
 
 Expected process result:
 
 - return code `1`
 - stderr contains `send blocked`
 - stdout does not contain `approved=true`
+- DB action remains `status='pending'` and `approved_by_user=0`
 
-- [ ] Run Python Mail Layer tests:
+Also add Graph parity tests that:
+
+1. Reject a `--body-file` that does not match stored `mail_actions.body_text` before token acquisition or Graph send.
+2. Reject a legacy draft-audit body before token acquisition or Graph send.
+3. Reject a final signed Graph body that introduces attachment/PDF wording before token acquisition or Graph send.
+
+- [x] Run Python Mail Layer tests:
 
 ```bash
 cd /home/openclaw/.openclaw/workspace-mail
@@ -553,11 +679,16 @@ python3 -m pytest tests/test_mail_layer.py tests/test_send_smtp_cli.py tests/tes
 
 Expected result: selected tests pass.
 
+Actual result:
+
+- `/tmp/openclaw-mail-pytest-venv/bin/python -m pytest tests/test_mail_layer.py tests/test_send_smtp_cli.py tests/test_send_graph_approved_cli.py tests/test_mail_protocol_auth.py tests/test_find_customer_evidence_cli.py -q`
+- `128 passed`
+
 ---
 
 ## Task 4: Add Customer Evidence Search CLI
 
-- [ ] Create `/home/openclaw/.openclaw/workspace-mail/scripts/find_customer_evidence.py`.
+- [x] Create `/home/openclaw/.openclaw/workspace-mail/scripts/find_customer_evidence.py`.
 
 Behavior:
 
@@ -657,7 +788,7 @@ Search functions:
 }
 ```
 
-- [ ] Create `/home/openclaw/.openclaw/workspace-mail/tests/test_find_customer_evidence_cli.py`.
+- [x] Create `/home/openclaw/.openclaw/workspace-mail/tests/test_find_customer_evidence_cli.py`.
 
 Test cases:
 
@@ -666,7 +797,7 @@ Test cases:
 3. No hits returns JSON with `hits=[]` and exit code `0`.
 4. `--format text` includes source labels and paths.
 
-- [ ] Run CLI tests:
+- [x] Run CLI tests:
 
 ```bash
 cd /home/openclaw/.openclaw/workspace-mail
@@ -675,7 +806,12 @@ python3 -m pytest tests/test_find_customer_evidence_cli.py -q
 
 Expected result: new CLI tests pass.
 
-- [ ] Run real read-only smoke check:
+Actual result:
+
+- `/tmp/openclaw-mail-pytest-venv/bin/python -m pytest tests/test_find_customer_evidence_cli.py -q`
+- `4 passed`
+
+- [x] Run real read-only smoke check:
 
 ```bash
 cd /home/openclaw/.openclaw/workspace-mail
@@ -684,11 +820,16 @@ python3 scripts/find_customer_evidence.py --query Feldmann --format text --limit
 
 Expected result includes the 2021 `Felzmann` document and the 2026 `Felsmann` offer/PDF found during investigation.
 
+Actual result:
+
+- `/tmp/openclaw-mail-pytest-venv/bin/python scripts/find_customer_evidence.py --query Feldmann --format text --limit 5`
+- Found 2015/2021 `Felzmann` documents and 2026 `Fellmann` DOCX/PDF evidence in `/home/openclaw/onedrive/02_Restaurant_Herrenhaus`.
+
 ---
 
 ## Task 5: Update Restaurant Skills
 
-- [ ] Update `/home/openclaw/.openclaw/workspace-restaurant/skills/dokument-finden/SKILL.md`.
+- [x] Update `/home/openclaw/.openclaw/workspace-restaurant/skills/dokument-finden/SKILL.md`.
 
 Add after step 2:
 
@@ -703,7 +844,7 @@ python3 scripts/find_customer_evidence.py --query "Feldmann" --format text --lim
 Wenn Treffer mit ähnlicher Schreibweise vorkommen (z. B. Feldmann/Felzmann/Felsmann), diese offen nennen und nicht als sichere Identität ausgeben, bis ein Pfad, eine Mail oder Vishal die Schreibweise bestätigt.
 ````
 
-- [ ] Update `/home/openclaw/.openclaw/workspace-restaurant/skills/restaurant-knowledge-db/SKILL.md`.
+- [x] Update `/home/openclaw/.openclaw/workspace-restaurant/skills/restaurant-knowledge-db/SKILL.md`.
 
 Add to Required Behavior:
 
@@ -711,7 +852,7 @@ Add to Required Behavior:
 Before answering customer-history questions or preparing an offer for a named customer, run `scripts/find_customer_evidence.py --query "Feldmann" --format text --limit 10` from `/home/openclaw/.openclaw/workspace-mail`, replacing `Feldmann` with the current customer name. Use its hits as the first evidence list, then query `restaurant.sqlite` directly only for deeper details.
 ```
 
-- [ ] Update `/home/openclaw/.openclaw/workspace-restaurant/skills/mail-dictation/SKILL.md`.
+- [x] Update `/home/openclaw/.openclaw/workspace-restaurant/skills/mail-dictation/SKILL.md`.
 
 Add to the structured tool section:
 
@@ -731,19 +872,19 @@ Add to Safety:
 If the body says `anbei`, `PDF`, `Anhang`, `beigefügt`, `attached`, or similar but no attachment path is present, stop before sending. Either attach the correct file or create a corrected draft without attachment wording.
 ```
 
-- [ ] Update `angebot-erstellung/SKILL.md` under historical search:
+- [x] Update `angebot-erstellung/SKILL.md` under historical search:
 
 ```md
 Before selecting similar offers for a named customer, run the Customer-Evidence-Search from the mail workspace. Include spelling variants in the comparison list and do not discard fuzzy hits without mentioning them.
 ```
 
-- [ ] Update `angebot-pruefung/SKILL.md` under e-mail/doc checks:
+- [x] Update `angebot-pruefung/SKILL.md` under e-mail/doc checks:
 
 ```md
 For a named customer status/history check, first run Customer-Evidence-Search. Then verify with OneDrive paths and Mail Layer hits before stating that no information exists.
 ```
 
-- [ ] Verify skill edits:
+- [x] Verify skill edits:
 
 ```bash
 rg -n "find_customer_evidence|send_buttons|attachment|Anhang|Feldmann|Felzmann|Felsmann" /home/openclaw/.openclaw/workspace-restaurant/skills
@@ -751,11 +892,16 @@ rg -n "find_customer_evidence|send_buttons|attachment|Anhang|Feldmann|Felzmann|F
 
 Expected result: each updated skill contains the new rules.
 
+Actual result:
+
+- `rg -n "find_customer_evidence|Customer-Evidence|Customer Evidence|send_buttons|blockers|warnings|bestehender Server-Draft" ...`
+- All five updated skill files contain the expected rules.
+
 ---
 
 ## Task 6: End-To-End Local Verification
 
-- [ ] OpenClaw targeted tests:
+- [x] OpenClaw targeted tests:
 
 ```bash
 cd /home/openclaw/src/openclaw
@@ -764,7 +910,12 @@ node scripts/run-vitest.mjs run --config test/vitest/vitest.agents-tools.config.
 
 Expected result: all targeted TypeScript tests pass.
 
-- [ ] Mail workspace targeted tests:
+Actual result:
+
+- `node scripts/run-vitest.mjs run --config test/vitest/vitest.agents-tools.config.ts src/agents/tools/mail-draft-risk.test.ts src/agents/tools/mail-draft-tool.test.ts`
+- `2 passed`, `15 passed`
+
+- [x] Mail workspace targeted tests:
 
 ```bash
 cd /home/openclaw/.openclaw/workspace-mail
@@ -773,7 +924,12 @@ python3 -m pytest tests/test_mail_layer.py tests/test_send_smtp_cli.py tests/tes
 
 Expected result: all targeted Python tests pass.
 
-- [ ] Real read-only evidence smoke:
+Actual result:
+
+- `/tmp/openclaw-mail-pytest-venv/bin/python -m pytest tests/test_mail_layer.py tests/test_send_smtp_cli.py tests/test_send_graph_approved_cli.py tests/test_mail_protocol_auth.py tests/test_find_customer_evidence_cli.py -q`
+- `128 passed`
+
+- [x] Real read-only evidence smoke:
 
 ```bash
 cd /home/openclaw/.openclaw/workspace-mail
@@ -782,7 +938,9 @@ python3 scripts/find_customer_evidence.py --query Feldmann --format text --limit
 
 Expected result: output includes at least one `Felzmann` or `Felsmann` hit and paths under `/home/openclaw/onedrive/02_Restaurant_Herrenhaus`.
 
-- [ ] Draft risk smoke without sending:
+Actual result: output includes 2015/2021 `Felzmann` and 2026 `Fellmann` hits under `/home/openclaw/onedrive/02_Restaurant_Herrenhaus`.
+
+- [x] Draft risk smoke without sending:
 
 Use this exact temporary DB smoke command:
 
@@ -819,7 +977,9 @@ python3 scripts/send_smtp.py --db "$db" --action-id "$action_id" --confirmation 
 
 Expected result: exit code `1` and `stderr` contains `send blocked`.
 
-- [ ] Build OpenClaw after tests:
+Actual result: exit code `1`; output contains `send blocked: draft text refers to an attachment/PDF`.
+
+- [x] Build OpenClaw after tests:
 
 ```bash
 cd /home/openclaw/src/openclaw
@@ -827,6 +987,15 @@ pnpm tsgo:core
 ```
 
 Expected result: TypeScript core check passes.
+
+Actual result: `pnpm` was not directly on `PATH`; `corepack pnpm tsgo:core` ran but failed on pre-existing/unrelated TypeScript errors in untouched files:
+
+- `src/agents/tools/message-tool.ts`
+- `src/auto-reply/dispatch.ts`
+- `src/auto-reply/reply/inbound-meta.ts`
+- `src/auto-reply/reply/mail-action-claim-guard.ts`
+
+The two `src/agents/tools/mail-draft-tool.ts` errors from this task were fixed and no longer appear.
 
 ---
 
