@@ -5,6 +5,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { Type } from "typebox";
 import { jsonResult, readStringArrayParam, readStringParam, type AnyAgentTool } from "./common.js";
+import { evaluateMailDraftRisk, splitMailDraftRiskIssues } from "./mail-draft-risk.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -37,6 +38,9 @@ type MailCreateDraftReceipt = {
   subject?: string;
   body?: string;
   body_text?: string;
+  attachments?: string[];
+  warnings?: Array<{ code: string; severity: "warning"; message: string }>;
+  blockers?: Array<{ code: string; severity: "blocker"; message: string }>;
   error?: string;
 };
 
@@ -337,6 +341,25 @@ export function createMailCreateDraftTool(options?: { mailWorkspaceDir?: string 
           error: "server_draft and local_only cannot both be true",
         });
       }
+      const riskIssues = evaluateMailDraftRisk({
+        recipient,
+        subject,
+        body,
+        attachments,
+        attachmentBaseDir: mailWorkspaceDir,
+      });
+      const { warnings, blockers } = splitMailDraftRiskIssues(riskIssues);
+      if (blockers.length > 0) {
+        return jsonResult({
+          ok: false,
+          recipient,
+          subject,
+          body_text: body,
+          attachments,
+          blockers,
+          error: blockers.map((issue) => issue.message).join("; "),
+        });
+      }
 
       const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mail-draft-"));
       const bodyFile = path.join(tmpDir, "body.txt");
@@ -391,6 +414,10 @@ export function createMailCreateDraftTool(options?: { mailWorkspaceDir?: string 
           ...parseCreateDraftOutput(stdout),
           recipient,
           subject,
+          body,
+          body_text: body,
+          attachments,
+          ...(warnings.length > 0 ? { warnings } : {}),
         });
       } catch (error) {
         return jsonResult(buildFailureReceipt(error, subject, recipient));

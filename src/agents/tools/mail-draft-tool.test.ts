@@ -1,5 +1,8 @@
 import { execFile } from "node:child_process";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMailCreateDraftTool, createMailRegisterDraftSendTool } from "./mail-draft-tool.js";
 
 vi.mock("node:child_process", () => ({
@@ -44,6 +47,18 @@ function resultDetails(value: unknown): Record<string, unknown> {
   }
   return value as Record<string, unknown>;
 }
+
+const tempDirs: string[] = [];
+
+async function makeTempMailWorkspace(): Promise<string> {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mail-workspace-test-"));
+  tempDirs.push(dir);
+  return dir;
+}
+
+afterEach(async () => {
+  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
+});
 
 describe("mail_create_draft recipient grounding", () => {
   beforeEach(() => {
@@ -133,6 +148,102 @@ describe("mail_create_draft recipient grounding", () => {
     expect(details.ok).toBe(false);
     expect(String(details.error)).toContain("reply_source required");
     expect(String(details.error)).not.toContain("recipient for new mail drafts");
+  });
+});
+
+describe("mail_create_draft risk results", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("returns full body text and attachment warnings in create-draft receipts", async () => {
+    const tool = createMailCreateDraftTool({ mailWorkspaceDir: "/tmp/mail" });
+    const body = "Anbei erhalten Sie das Angebot als PDF.";
+
+    const result = await tool.execute("call-mail-draft", {
+      account: "restaurant",
+      to: "kunde@example.com",
+      subject: "Ihr Angebot",
+      body,
+      recipient_source: "user_provided",
+      recipient_confirmation: "Bitte schreiben Sie an kunde@example.com.",
+    });
+
+    const details = resultDetails(result.details);
+    expect(execFile).toHaveBeenCalledOnce();
+    expect(details.body).toBe(body);
+    expect(details.body_text).toBe(body);
+    expect(details.attachments).toEqual([]);
+    expect(details.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "attachment_implied_but_missing",
+          severity: "warning",
+        }),
+      ]),
+    );
+    expect(details.send_buttons).toEqual([
+      [
+        {
+          text: "Senden freigeben",
+          callback_data: "Senden freigeben: Action 1",
+          style: "success",
+        },
+      ],
+    ]);
+  });
+
+  it("blocks create-draft when an attachment path is missing", async () => {
+    const missingAttachment = "/tmp/openclaw-does-not-exist.pdf";
+    const tool = createMailCreateDraftTool({ mailWorkspaceDir: "/tmp/mail" });
+
+    const result = await tool.execute("call-mail-draft", {
+      account: "restaurant",
+      to: "kunde@example.com",
+      subject: "Ihr Angebot",
+      body: "Hier ist das Angebot.",
+      attachments: [missingAttachment],
+      recipient_source: "user_provided",
+      recipient_confirmation: "Bitte schreiben Sie an kunde@example.com.",
+    });
+
+    const details = resultDetails(result.details);
+    expect(execFile).not.toHaveBeenCalled();
+    expect(details.ok).toBe(false);
+    expect(details.blockers).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "attachment_path_missing",
+          severity: "blocker",
+        }),
+      ]),
+    );
+    expect(String(details.error)).toContain(
+      `Attachment path does not exist or is not a file: ${missingAttachment}`,
+    );
+  });
+
+  it("resolves relative attachments against the mail workspace before creating drafts", async () => {
+    const mailWorkspaceDir = await makeTempMailWorkspace();
+    await fs.writeFile(path.join(mailWorkspaceDir, "angebot.pdf"), "pdf", "utf8");
+    const tool = createMailCreateDraftTool({ mailWorkspaceDir });
+
+    const result = await tool.execute("call-mail-draft", {
+      account: "restaurant",
+      to: "kunde@example.com",
+      subject: "Ihr Angebot",
+      body: "Anbei erhalten Sie das Angebot als PDF.",
+      attachments: ["angebot.pdf"],
+      recipient_source: "user_provided",
+      recipient_confirmation: "Bitte schreiben Sie an kunde@example.com.",
+    });
+
+    const details = resultDetails(result.details);
+    expect(details.ok).toBe(true);
+    expect(details.blockers).toBeUndefined();
+    expect(execFile).toHaveBeenCalledOnce();
+    const [, args] = vi.mocked(execFile).mock.calls[0] ?? [];
+    expect(args).toEqual(expect.arrayContaining(["--attachment", "angebot.pdf"]));
   });
 });
 
