@@ -25,7 +25,9 @@ Git-managed local OpenClaw source tree when source-level local fixes are missing
   delivery path that does not always go through the generic send tool.
 - Telegram Mail Layer approval callback: source-backed deterministic handling
   for `Senden freigeben: Action <id>` button callbacks, so the button invokes
-  Mail Layer send directly instead of relying on the model to run the send tool.
+  Mail Layer send directly instead of relying on the model to run the send tool;
+  it only reports sent after `send_log` and IMAP sent-folder `Message-ID`
+  evidence are both present.
 - Telegram ingress watchdog: source-backed restart guard for isolated Telegram
   polling when unattempted `pending` spool updates age out with no active spool
   handler, which recovers dispatcher stalls after network/suspend issues.

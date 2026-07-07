@@ -72,6 +72,10 @@ TELEGRAM_MAIL_APPROVAL_CALLBACK_MARKERS = (
     "MAIL_APPROVAL_CALLBACK_PATTERN",
     "sendTelegramMailApprovalCallback",
     "parseTelegramMailApprovalCallback",
+    "verifyTelegramMailApprovalSendEvidence",
+    "imap_sent_match",
+    '"Message-ID"',
+    "send_log",
     '"--confirmation"',
 )
 PROVIDER_MEDIA_REF_HINT_MARKERS = (
