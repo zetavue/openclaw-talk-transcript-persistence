@@ -194,14 +194,16 @@ describe("mail_create_draft risk results", () => {
   });
 
   it("blocks create-draft when an attachment path is missing", async () => {
-    const missingAttachment = "/tmp/openclaw-does-not-exist.pdf";
-    const tool = createMailCreateDraftTool({ mailWorkspaceDir: "/tmp/mail" });
+    const mailWorkspaceDir = await makeTempMailWorkspace();
+    const missingAttachment = path.join(mailWorkspaceDir, "missing.pdf");
+    const body = "Hier ist das Angebot.";
+    const tool = createMailCreateDraftTool({ mailWorkspaceDir });
 
     const result = await tool.execute("call-mail-draft", {
       account: "restaurant",
       to: "kunde@example.com",
       subject: "Ihr Angebot",
-      body: "Hier ist das Angebot.",
+      body,
       attachments: [missingAttachment],
       recipient_source: "user_provided",
       recipient_confirmation: "Bitte schreiben Sie an kunde@example.com.",
@@ -210,6 +212,8 @@ describe("mail_create_draft risk results", () => {
     const details = resultDetails(result.details);
     expect(execFile).not.toHaveBeenCalled();
     expect(details.ok).toBe(false);
+    expect(details.body_text).toBe(body);
+    expect(details.attachments).toEqual([missingAttachment]);
     expect(details.blockers).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
