@@ -17,6 +17,7 @@ export type MailDraftRiskInput = {
   subject?: string;
   body?: string;
   attachments?: string[];
+  attachmentBaseDir?: string;
 };
 
 const ATTACHMENT_HINT_RE =
@@ -47,9 +48,16 @@ function salutationNames(text: string): string[] {
   return names;
 }
 
-function attachmentExists(attachmentPath: string): boolean {
+function resolveAttachmentPath(attachmentPath: string, attachmentBaseDir?: string): string {
+  if (path.isAbsolute(attachmentPath) || !attachmentBaseDir) {
+    return path.resolve(attachmentPath);
+  }
+  return path.resolve(attachmentBaseDir, attachmentPath);
+}
+
+function attachmentExists(attachmentPath: string, attachmentBaseDir?: string): boolean {
   try {
-    return fs.statSync(path.resolve(attachmentPath)).isFile();
+    return fs.statSync(resolveAttachmentPath(attachmentPath, attachmentBaseDir)).isFile();
   } catch {
     return false;
   }
@@ -70,7 +78,7 @@ export function evaluateMailDraftRisk(input: MailDraftRiskInput): MailDraftRiskI
   }
 
   for (const attachment of attachments) {
-    if (!attachmentExists(attachment)) {
+    if (!attachmentExists(attachment, input.attachmentBaseDir)) {
       issues.push({
         code: "attachment_path_missing",
         severity: "blocker",

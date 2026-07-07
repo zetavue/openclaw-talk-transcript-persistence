@@ -68,6 +68,41 @@ describe("evaluateMailDraftRisk", () => {
     expect(issues).toEqual([]);
   });
 
+  test("allows relative attachments resolved from an attachment base directory", () => {
+    const baseDir = makeTempDir();
+    fs.writeFileSync(path.join(baseDir, "angebot.pdf"), "pdf");
+
+    const issues = evaluateMailDraftRisk({
+      recipient: "maria.muster@example.com",
+      body: "Hallo Frau Muster,\n\nanbei finden Sie das Angebot.",
+      attachments: ["angebot.pdf"],
+      attachmentBaseDir: baseDir,
+    });
+
+    expect(issues).toEqual([]);
+  });
+
+  test("blocks attachment paths that resolve to directories", () => {
+    const attachmentDir = makeTempDir();
+
+    const issues = evaluateMailDraftRisk({
+      recipient: "maria.muster@example.com",
+      body: "Hallo Frau Muster,\n\nhier ist das Angebot.",
+      attachments: [attachmentDir],
+    });
+
+    expect(splitMailDraftRiskIssues(issues)).toEqual({
+      warnings: [],
+      blockers: [
+        {
+          code: "attachment_path_missing",
+          severity: "blocker",
+          message: `Attachment path does not exist or is not a file: ${attachmentDir}`,
+        },
+      ],
+    });
+  });
+
   test("warns on obvious customer-name and recipient mismatch", () => {
     const issues = evaluateMailDraftRisk({
       recipient: "maria.muster@example.com",
