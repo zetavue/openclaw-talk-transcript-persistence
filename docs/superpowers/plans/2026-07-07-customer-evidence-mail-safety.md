@@ -26,6 +26,8 @@ Local operational files:
 - `/home/openclaw/.openclaw/workspace-mail/scripts/mail_layer.py` - add send-time risk helpers and block unsafe sends.
 - `/home/openclaw/.openclaw/workspace-mail/tests/test_mail_layer.py` - add risk helper tests where existing Mail Layer fixtures live.
 - `/home/openclaw/.openclaw/workspace-mail/tests/test_send_smtp_cli.py` - add dry-run/CLI failure coverage for unsafe approved actions.
+- `/home/openclaw/.openclaw/workspace-mail/scripts/send_graph_approved.py` - apply the same send-time risk guard to Microsoft Graph approved sends.
+- `/home/openclaw/.openclaw/workspace-mail/tests/test_send_graph_approved_cli.py` - add Graph dry-run coverage for unsafe approved actions.
 - `/home/openclaw/.openclaw/workspace-mail/scripts/find_customer_evidence.py` - new read-only search CLI for restaurant customers.
 - `/home/openclaw/.openclaw/workspace-mail/tests/test_find_customer_evidence_cli.py` - new CLI tests with temp DB and temp file tree.
 - `/home/openclaw/.openclaw/workspace-restaurant/skills/dokument-finden/SKILL.md` - require variant search and evidence summary.
@@ -459,6 +461,40 @@ Update imports:
     require_no_send_risk,
 ```
 
+- [ ] Apply the same send-time risk check to `send_graph_approved.py`, because Microsoft Graph is another approved send path using the same Mail Layer actions.
+
+Implementation:
+
+```python
+from mail_layer import (
+    DEFAULT_ACCOUNTS,
+    DEFAULT_DB,
+    MailLayerError,
+    action_attachment_paths,
+    build_signed_email_body,
+    connect,
+    ensure_send_allowed,
+    get_account,
+    mark_sent,
+    require_no_send_risk,
+    require_send_approval,
+)
+
+        action = require_send_approval(
+            db_path=args.db,
+            action_id=args.action_id,
+            confirmation=args.confirmation,
+        )
+        with connect(args.db) as conn:
+            ensure_send_allowed(conn, args.action_id)
+        body = Path(args.body_file).read_text(encoding="utf-8")
+        require_no_send_risk(action, body)
+        if args.dry_run:
+            print("approved=true")
+            print("dry_run=true")
+            return 0
+```
+
 - [ ] Extend `/home/openclaw/.openclaw/workspace-mail/tests/test_mail_layer.py` using its existing DB fixture style.
 
 Add tests that:
@@ -498,11 +534,21 @@ Expected process result:
 - stderr contains `send blocked`
 - stdout does not contain `approved=true`
 
+- [ ] Extend `/home/openclaw/.openclaw/workspace-mail/tests/test_send_graph_approved_cli.py`.
+
+Add a dry-run test that creates an approved Graph action with no attachments and a body promising a PDF, then runs `send_graph_approved.main([... "--dry-run" ...])`.
+
+Expected process result:
+
+- return code `1`
+- stderr contains `send blocked`
+- stdout does not contain `approved=true`
+
 - [ ] Run Python Mail Layer tests:
 
 ```bash
 cd /home/openclaw/.openclaw/workspace-mail
-python3 -m pytest tests/test_mail_layer.py tests/test_send_smtp_cli.py -q
+python3 -m pytest tests/test_mail_layer.py tests/test_send_smtp_cli.py tests/test_send_graph_approved_cli.py -q
 ```
 
 Expected result: selected tests pass.
