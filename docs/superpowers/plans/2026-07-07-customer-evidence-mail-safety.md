@@ -611,7 +611,7 @@ def claim_send_action(db_path=DEFAULT_DB, action_id=None):
 
 SMTP and Graph call `claim_send_action` immediately before the external provider send. `mark_sent` accepts `approved` or `sending`, then writes `sent`.
 
-If the external provider call fails after the action is claimed, the action is moved to `send_failed`. A later exact approval phrase can move `send_failed` back to `approved` for an explicit retry; `sending` cannot be overwritten by a concurrent approval call.
+If the external provider call fails after the action is claimed, the action is moved to `send_failed`. A later exact approval phrase can move `send_failed` back to `approved` for an explicit retry; `sending` cannot be overwritten by a concurrent approval call. SMTP refused-recipient results are moved to `send_unknown`, because partial provider acceptance cannot be safely retried without human review. Approval updates are guarded by the validated `action_hash`, so a stale approval phrase cannot approve changed content.
 
 - [x] Extend `/home/openclaw/.openclaw/workspace-mail/tests/test_mail_layer.py` using its existing DB fixture style.
 
@@ -682,7 +682,7 @@ Expected result: selected tests pass.
 Actual result:
 
 - `/tmp/openclaw-mail-pytest-venv/bin/python -m pytest tests/test_mail_layer.py tests/test_send_smtp_cli.py tests/test_send_graph_approved_cli.py tests/test_mail_protocol_auth.py tests/test_find_customer_evidence_cli.py -q`
-- `128 passed`
+- `130 passed`
 
 ---
 
@@ -927,7 +927,7 @@ Expected result: all targeted Python tests pass.
 Actual result:
 
 - `/tmp/openclaw-mail-pytest-venv/bin/python -m pytest tests/test_mail_layer.py tests/test_send_smtp_cli.py tests/test_send_graph_approved_cli.py tests/test_mail_protocol_auth.py tests/test_find_customer_evidence_cli.py -q`
-- `128 passed`
+- `130 passed`
 
 - [x] Real read-only evidence smoke:
 
