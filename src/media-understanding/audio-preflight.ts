@@ -1,9 +1,9 @@
+import type { ActiveMediaModel } from "../../packages/media-understanding-common/src/active-model.js";
 // Audio preflight transcribes voice notes before mention checks and optionally
 // echoes the transcript back to the source chat.
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
-import type { ActiveMediaModel } from "../../packages/media-understanding-common/src/active-model.js";
 import { isAudioAttachment } from "./attachments.js";
 import { runAudioTranscription } from "./audio-transcription-runner.js";
 import { DEFAULT_ECHO_TRANSCRIPT_FORMAT, sendTranscriptEcho } from "./echo-transcript.js";
@@ -47,26 +47,41 @@ export async function transcribeFirstAudio(params: {
   }
 
   try {
-    const { transcript } = await runAudioTranscription({
+    const result = await runAudioTranscription({
       ctx,
       cfg,
-      attachments,
+      attachments: [firstAudio],
       agentDir: params.agentDir,
       providers: params.providers,
       activeModel: params.activeModel,
       localPathRoots: resolveMediaAttachmentLocalRoots({ cfg, ctx }),
     });
+    const transcript = result.transcript;
     if (!transcript) {
       return undefined;
     }
+    (ctx as Record<string, unknown>).AudioTranscriptText = transcript;
+    if (result.provider) {
+      (ctx as Record<string, unknown>).AudioTranscriptProvider = result.provider;
+    }
+    if (result.model) {
+      (ctx as Record<string, unknown>).AudioTranscriptModel = result.model;
+    }
+    (ctx as Record<string, unknown>).AudioTranscriptSource = "preflight";
 
     if (audioConfig?.echoTranscript) {
-      await sendTranscriptEcho({
-        ctx,
-        cfg,
-        transcript,
-        format: audioConfig.echoFormat ?? DEFAULT_ECHO_TRANSCRIPT_FORMAT,
-      });
+      try {
+        await sendTranscriptEcho({
+          ctx,
+          cfg,
+          transcript,
+          format: audioConfig.echoFormat ?? DEFAULT_ECHO_TRANSCRIPT_FORMAT,
+        });
+      } catch (err) {
+        if (shouldLogVerbose()) {
+          logVerbose(`audio-preflight: transcript echo failed: ${String(err)}`);
+        }
+      }
     }
 
     // Mark this attachment as transcribed so the main media pass does not duplicate STT output.

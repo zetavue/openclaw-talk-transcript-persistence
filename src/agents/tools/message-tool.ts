@@ -3,6 +3,11 @@
  *
  * Sends, edits, reacts to, polls, and routes messages through channel plugins and Gateway-backed actions.
  */
+import { execFile } from "node:child_process";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { promisify } from "node:util";
 import {
   normalizeOptionalString,
   normalizeOptionalStringifiedId,
@@ -85,6 +90,7 @@ import {
 } from "./gateway.js";
 import { isPollVoteEchoText } from "./poll-vote-echo.js";
 
+const execFileAsync = promisify(execFile);
 const AllMessageActions = CHANNEL_MESSAGE_ACTION_NAMES;
 const MESSAGE_TOOL_THREAD_READ_HINT =
   ' Use action="read" with threadId to fetch prior messages in a thread when you need conversation context you do not have yet.';
@@ -393,6 +399,19 @@ function readFirstStringParam(params: Record<string, unknown>, keys: readonly st
   return "";
 }
 
+function readFirstStringParamEntry(
+  params: Record<string, unknown>,
+  keys: readonly string[],
+): { key: string; value: string } | undefined {
+  for (const key of keys) {
+    const value = readStringParam(params, key);
+    if (value) {
+      return { key, value };
+    }
+  }
+  return undefined;
+}
+
 function readStructuredAttachmentMediaParams(value: unknown): string[] {
   if (!Array.isArray(value)) {
     return [];
@@ -432,6 +451,193 @@ function hasSanitizedSendPayloadContent(params: Record<string, unknown>): boolea
     },
     { trimText: true },
   );
+}
+
+const MAIL_APPROVAL_PATTERN = /\bSenden freigeben:\s*Action\s+(\d+)\b/u;
+const MAIL_MESSAGE_PARAM_KEYS = ["message", "text", "content", "caption", "SendMessage"] as const;
+const MAIL_APPROVAL_PRESENTATION_CHANNELS = new Set(["telegram", "dashboard", "webchat"]);
+
+type MailActionReceipt = {
+  id: number;
+  account?: string;
+  recipient?: string;
+  subject?: string;
+  bodyText?: string;
+  draftMailbox?: string;
+  providerDraftId?: string;
+};
+
+type LookupMailActionReceipt = (actionId: number) => Promise<MailActionReceipt | null | undefined>;
+
+function isMailApprovalPresentationChannel(channel: string | undefined): boolean {
+  return channel ? MAIL_APPROVAL_PRESENTATION_CHANNELS.has(channel) : false;
+}
+
+function defaultMailActionDbPath(): string {
+  const openclawHome = process.env.OPENCLAW_HOME?.trim() || path.join(os.homedir(), ".openclaw");
+  return path.join(openclawHome, "workspace-mail", "mail_agent.sqlite");
+}
+
+function readSqliteText(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  return undefined;
+}
+
+function readNonEmptySqliteText(value: unknown): string | undefined {
+  const text = readSqliteText(value);
+  return text && text.trim().length > 0 ? text : undefined;
+}
+
+async function lookupSqliteMailActionReceipt(
+  actionId: number,
+): Promise<MailActionReceipt | undefined> {
+  if (!Number.isSafeInteger(actionId) || actionId <= 0) {
+    return undefined;
+  }
+  const dbPath = process.env.OPENCLAW_MAIL_ACTION_DB?.trim() || defaultMailActionDbPath();
+  try {
+    await fs.access(dbPath);
+  } catch {
+    return undefined;
+  }
+
+  const query = [
+    "select id, account, recipient, subject, body_text, draft_mailbox, provider_draft_id",
+    "from mail_actions",
+    `where id = ${actionId}`,
+    "limit 1;",
+  ].join(" ");
+  try {
+    const { stdout } = await execFileAsync("sqlite3", ["-json", dbPath, query], {
+      timeout: 1500,
+      maxBuffer: 1024 * 1024,
+    });
+    const output = stdout;
+    const rows = JSON.parse(output.trim() || "[]") as unknown;
+    if (!Array.isArray(rows) || rows.length === 0) {
+      return undefined;
+    }
+    const row = rows[0] as Record<string, unknown>;
+    const id = Number(row.id);
+    if (!Number.isSafeInteger(id) || id <= 0) {
+      return undefined;
+    }
+    const account = readNonEmptySqliteText(row.account);
+    return {
+      id,
+      ...(account ? { account } : {}),
+      ...(readNonEmptySqliteText(row.recipient)
+        ? { recipient: readNonEmptySqliteText(row.recipient) }
+        : {}),
+      ...(readNonEmptySqliteText(row.subject)
+        ? { subject: readNonEmptySqliteText(row.subject) }
+        : {}),
+      ...(readSqliteText(row.body_text) !== undefined
+        ? { bodyText: readSqliteText(row.body_text) }
+        : {}),
+      ...(readNonEmptySqliteText(row.draft_mailbox)
+        ? { draftMailbox: readNonEmptySqliteText(row.draft_mailbox) }
+        : {}),
+      ...(readNonEmptySqliteText(row.provider_draft_id)
+        ? { providerDraftId: readNonEmptySqliteText(row.provider_draft_id) }
+        : {}),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function formatMailDraftReceipt(params: {
+  actionId: number;
+  approval: string;
+  receipt: MailActionReceipt;
+}): string {
+  const lines = ["Draft created.", "", `Action ID: ${params.receipt.id || params.actionId}`];
+  if (params.receipt.recipient) {
+    lines.push(`Recipient: ${params.receipt.recipient}`);
+  }
+  if (params.receipt.subject) {
+    lines.push(`Subject: ${params.receipt.subject}`);
+  }
+  const bodyText = params.receipt.bodyText ?? "";
+  if (bodyText.includes("\n")) {
+    lines.push("Body:", bodyText);
+  } else {
+    lines.push(`Body: ${bodyText}`);
+  }
+  if (params.receipt.draftMailbox) {
+    lines.push(`Server draft mailbox: ${params.receipt.draftMailbox}`);
+  }
+  if (params.receipt.providerDraftId) {
+    lines.push(`Provider draft ID: ${params.receipt.providerDraftId}`);
+  }
+  lines.push(`Approval: ${params.approval}`);
+  return lines.join("\n");
+}
+
+async function maybeAddMailApprovalPresentation(
+  params: Record<string, unknown>,
+  options: {
+    agentId?: string;
+    currentChannelProvider?: string;
+    lookupMailActionReceipt?: LookupMailActionReceipt;
+  },
+): Promise<void> {
+  const action = normalizeOptionalString(params.action);
+  if (action !== "send") {
+    return;
+  }
+  const channel = normalizeMessageChannel(
+    normalizeOptionalString(params.channel) ??
+      normalizeOptionalString(params.provider) ??
+      options.currentChannelProvider,
+  );
+  if (!isMailApprovalPresentationChannel(channel)) {
+    return;
+  }
+  const messageParam = readFirstStringParamEntry(params, MAIL_MESSAGE_PARAM_KEYS);
+  const actionMatch = messageParam ? MAIL_APPROVAL_PATTERN.exec(messageParam.value) : null;
+  if (!messageParam || !actionMatch) {
+    return;
+  }
+  const actionId = Number(actionMatch[1]);
+  if (!Number.isSafeInteger(actionId) || actionId <= 0) {
+    return;
+  }
+  const approval = `Senden freigeben: Action ${actionId}`;
+  const receipt = await (options.lookupMailActionReceipt ?? lookupSqliteMailActionReceipt)(
+    actionId,
+  );
+  const receiptMatchesAgent =
+    !receipt?.account || !options.agentId || receipt.account === options.agentId;
+  if (receipt && receiptMatchesAgent) {
+    params[messageParam.key] = formatMailDraftReceipt({
+      actionId,
+      approval,
+      receipt,
+    });
+  }
+  if (params.presentation === undefined) {
+    params.presentation = {
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Senden freigeben",
+              value: approval,
+              style: "success",
+            },
+          ],
+        },
+      ],
+    };
+  }
 }
 
 function buildRoutingSchema() {
@@ -892,6 +1098,8 @@ type MessageToolOptions = {
   currentInboundAudio?: boolean;
   hasCurrentInboundAudio?: () => boolean;
   replyToMode?: "off" | "first" | "all" | "batched";
+  lookupMailActionReceipt?: LookupMailActionReceipt;
+  lookupTestAgentMailActionReceipt?: LookupMailActionReceipt;
   hasRepliedRef?: { value: boolean };
   sameChannelThreadRequired?: boolean;
   sandboxRoot?: string;
@@ -1346,6 +1554,12 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
               : "Suppressed outbound message text because it matched internal runtime context.",
         });
       }
+      await maybeAddMailApprovalPresentation(params, {
+        agentId: resolvedAgentId,
+        currentChannelProvider: effectiveCurrentChannel.currentChannelProvider,
+        lookupMailActionReceipt:
+          options?.lookupMailActionReceipt ?? options?.lookupTestAgentMailActionReceipt,
+      });
       const requireExplicitTarget = options?.requireExplicitTarget === true;
       if (requireExplicitTarget && actionNeedsExplicitTarget(action)) {
         const explicitTarget =

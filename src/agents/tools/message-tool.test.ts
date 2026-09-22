@@ -1439,6 +1439,218 @@ describe("message tool delivery mode schema", () => {
 });
 
 describe("message tool agent routing", () => {
+  it("adds a Telegram approval presentation for mail draft receipts on any agent", async () => {
+    mockSendResult({ channel: "telegram", to: "telegram:1944659960" });
+
+    const input = await executeSend({
+      action: {
+        message:
+          "Draft created.\n\n" +
+          "Action ID: 109\n" +
+          "Recipient: test@zetavue.com\n" +
+          "Subject: Button render verification 2\n" +
+          "Body: button rendering test with presentation only\n" +
+          "Server draft mailbox: Entwürfe\n" +
+          "Provider draft ID: 5\n" +
+          "Short approval: Senden freigeben: Action 109",
+      },
+      toolOptions: {
+        agentId: "restaurant",
+        currentChannelProvider: "telegram",
+        currentMessagingTarget: "telegram:1944659960",
+      },
+    });
+
+    expect(input?.params?.presentation).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Senden freigeben",
+              value: "Senden freigeben: Action 109",
+              style: "success",
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("replaces summarized Telegram mail draft receipts with the full stored body", async () => {
+    mockSendResult({ channel: "telegram", to: "telegram:1944659960" });
+
+    const fullBody =
+      'A scarecrow walks into a bar and says, "Drinks are on me. I am outstanding in my field."';
+
+    const input = await executeSend({
+      action: {
+        message:
+          "New draft reply (longer joke) to last email created.\n\n" +
+          "Action ID: 117\n" +
+          "Subject: Re: Test\n" +
+          "Body: [scarecrow + duck bartender joke]\n\n" +
+          "server_draft: true (Entwürfe, provider_draft_id=9)\n" +
+          "Approval: Senden freigeben: Action 117",
+        presentation: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [
+                {
+                  label: "Senden freigeben",
+                  value: "Senden freigeben: Action 117",
+                  style: "success",
+                },
+              ],
+            },
+          ],
+        },
+      },
+      toolOptions: {
+        agentId: "test",
+        currentChannelProvider: "telegram",
+        currentMessagingTarget: "telegram:1944659960",
+        lookupTestAgentMailActionReceipt: async () => ({
+          id: 117,
+          recipient: "cistamea@outlook.com",
+          subject: "Re: Test",
+          bodyText: fullBody,
+          draftMailbox: "Entwürfe",
+          providerDraftId: "9",
+        }),
+      } as never,
+    });
+
+    expect(input?.params?.message).toContain(`Body: ${fullBody}`);
+    expect(input?.params?.message).not.toContain("[scarecrow + duck bartender joke]");
+    expect(input?.params?.presentation).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Senden freigeben",
+              value: "Senden freigeben: Action 117",
+              style: "success",
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("does not replace summarized mail draft bodies from another agent account", async () => {
+    mockSendResult({ channel: "telegram", to: "telegram:1944659960" });
+
+    const fullBody = "private test-agent draft body";
+
+    const input = await executeSend({
+      action: {
+        message:
+          "New draft reply created.\n\n" +
+          "Action ID: 117\n" +
+          "Subject: Re: Test\n" +
+          "Body: [summary only]\n\n" +
+          "Approval: Senden freigeben: Action 117",
+      },
+      toolOptions: {
+        agentId: "restaurant",
+        currentChannelProvider: "telegram",
+        currentMessagingTarget: "telegram:1944659960",
+        lookupMailActionReceipt: async () => ({
+          id: 117,
+          account: "test",
+          recipient: "cistamea@outlook.com",
+          subject: "Re: Test",
+          bodyText: fullBody,
+          draftMailbox: "Entwürfe",
+          providerDraftId: "9",
+        }),
+      } as never,
+    });
+
+    expect(input?.params?.message).toContain("Body: [summary only]");
+    expect(input?.params?.message).not.toContain(fullBody);
+    expect(input?.params?.presentation).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Senden freigeben",
+              value: "Senden freigeben: Action 117",
+              style: "success",
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("adds mail approval presentations for non-test agents", async () => {
+    mockSendResult({ channel: "telegram", to: "telegram:1944659960" });
+
+    const input = await executeSend({
+      action: {
+        message:
+          "Draft created.\n\n" +
+          "Action ID: 109\n" +
+          "Short approval: Senden freigeben: Action 109",
+      },
+      toolOptions: {
+        agentId: "restaurant",
+        currentChannelProvider: "telegram",
+        currentMessagingTarget: "telegram:1944659960",
+      },
+    });
+
+    expect(input?.params?.presentation).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Senden freigeben",
+              value: "Senden freigeben: Action 109",
+              style: "success",
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("adds mail approval presentations on webchat source replies", async () => {
+    mockSendResult({ channel: "webchat", to: "webchat:5e9346d6" });
+
+    const input = await executeSend({
+      action: {
+        message: "Send-Aktion registriert.\n\nAction ID: 125\nSenden freigeben: Action 125",
+      },
+      toolOptions: {
+        agentId: "restaurant",
+        currentChannelProvider: "webchat",
+        currentMessagingTarget: "webchat:5e9346d6",
+      },
+    });
+
+    expect(input?.params?.presentation).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Senden freigeben",
+              value: "Senden freigeben: Action 125",
+              style: "success",
+            },
+          ],
+        },
+      ],
+    });
+  });
+
   it("derives agentId from the session key", async () => {
     mockSendResult();
 

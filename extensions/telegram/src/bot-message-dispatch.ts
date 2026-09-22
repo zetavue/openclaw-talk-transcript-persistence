@@ -200,6 +200,28 @@ function resolvePayloadTelegramInlineButtons(
   });
 }
 
+function withTelegramInlineButtons(
+  payload: ReplyPayload,
+  buttons?: TelegramInlineButtons,
+): ReplyPayload {
+  if (!buttons) {
+    return payload;
+  }
+  const channelData = payload.channelData ?? {};
+  const telegramData = channelData.telegram;
+  const telegram =
+    telegramData && typeof telegramData === "object" && !Array.isArray(telegramData)
+      ? (telegramData as Record<string, unknown>)
+      : {};
+  return {
+    ...payload,
+    channelData: {
+      ...channelData,
+      telegram: { ...telegram, buttons },
+    },
+  };
+}
+
 function hasExecApprovalPayload(payload: ReplyPayload): boolean {
   return payload.channelData?.execApproval !== undefined;
 }
@@ -2107,13 +2129,15 @@ export const dispatchTelegramMessage = async ({
     const deliverProgressModeFinalAnswer = async (
       payload: ReplyPayload,
       text: string,
+      buttons?: TelegramInlineButtons,
     ): Promise<LaneDeliveryResult> => {
+      const finalPayload = withTelegramInlineButtons(applyTextToPayload(payload, text), buttons);
       if (payload.isError === true) {
         // Error finals get no collapse summary (Discord parity); tear down, then
         // deliver the error below.
         progressSummaryDelivered = true;
         await teardownProgressWindow();
-        const delivered = await sendPayload(applyTextToPayload(payload, text), { durable: true });
+        const delivered = await sendPayload(finalPayload, { durable: true });
         if (!delivered) {
           return { kind: "skipped" };
         }
@@ -2128,7 +2152,7 @@ export const dispatchTelegramMessage = async ({
       // THEN collapse the window above it. Editing the tall window down to a
       // one-line bar after the final is delivered keeps the shrink above the
       // anchor, so the final never scrolls off screen (edit-shrink anchor loss).
-      const delivered = await sendPayload(applyTextToPayload(payload, text), { durable: true });
+      const delivered = await sendPayload(finalPayload, { durable: true });
       // Collapse AFTER the final either way — don't leave a stale window even
       // when the final skipped/failed. resetAnswerLaneAfterCollapse resets lane
       // state (clearing `finalized`), so mark the final delivered LAST.
@@ -2323,7 +2347,7 @@ export const dispatchTelegramMessage = async ({
                         return deliverPostFinalFollowUpText();
                       }
                       if (streamMode === "progress") {
-                        return deliverProgressModeFinalAnswer(answerPayload, finalText);
+                        return deliverProgressModeFinalAnswer(answerPayload, finalText, buttons);
                       }
                       if (!(await rotateAnswerLaneAfterToolProgress())) {
                         await rotateAnswerLaneAfterQueuedBlocksSettle();

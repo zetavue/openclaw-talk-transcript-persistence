@@ -89,6 +89,46 @@ const MUTATING_FAILURE_ERROR_WHILE_ACTION_PATTERN = new RegExp(
 );
 const DID_NOT_FAIL_PATTERN = /\b(?:did not|didn't)\s+fail\b/u;
 const NEGATED_FAILURE_PATTERN = /\b(?:no|not|without)\s+(?:failures?|errors?)\b/u;
+const MAIL_APPROVAL_PATTERN = /\bSenden freigeben:\s*Action\s+(\d+)\b/u;
+
+function isMailApprovalPresentationSessionKey(sessionKey: string): boolean {
+  const normalized = sessionKey.toLowerCase();
+  return (
+    normalized.includes("telegram") ||
+    normalized.includes("dashboard") ||
+    normalized.includes("webchat")
+  );
+}
+
+function buildMailApprovalPresentation(params: {
+  agentId?: string;
+  sessionKey: string;
+  text?: string;
+  existingPresentation?: ReplyPayload["presentation"];
+}): ReplyPayload["presentation"] | undefined {
+  if (params.existingPresentation || !isMailApprovalPresentationSessionKey(params.sessionKey)) {
+    return undefined;
+  }
+  const actionMatch = params.text ? MAIL_APPROVAL_PATTERN.exec(params.text) : null;
+  if (!actionMatch) {
+    return undefined;
+  }
+  const approval = `Senden freigeben: Action ${actionMatch[1]}`;
+  return {
+    blocks: [
+      {
+        type: "buttons",
+        buttons: [
+          {
+            label: "Senden freigeben",
+            value: approval,
+            style: "success",
+          },
+        ],
+      },
+    ],
+  };
+}
 
 function isRecoverableToolError(error: string | undefined): boolean {
   const errorLower = normalizeOptionalLowercaseString(error) ?? "";
@@ -956,6 +996,15 @@ export function buildEmbeddedRunPayloads(params: {
       }
       if (item.presentation) {
         payload.presentation = item.presentation;
+      }
+      const mailApprovalPresentation = buildMailApprovalPresentation({
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+        text: payload.text,
+        existingPresentation: payload.presentation,
+      });
+      if (mailApprovalPresentation) {
+        payload.presentation = mailApprovalPresentation;
       }
       if (item.interactive) {
         payload.interactive = item.interactive;

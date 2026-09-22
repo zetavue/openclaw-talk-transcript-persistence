@@ -149,6 +149,7 @@ import {
 } from "./ingress.js";
 import { resolveTelegramInlineButtonsScope } from "./inline-buttons.js";
 import { dispatchTelegramPluginInteractiveHandler } from "./interactive-dispatch.js";
+import { sendTelegramMailApprovalCallback } from "./mail-approval-callback.js";
 import {
   buildTelegramConversationContext,
   buildTelegramReplyChain,
@@ -2827,6 +2828,58 @@ export const registerTelegramHandlers = ({
         return;
       }
       const runtimeCfg = telegramDeps.getRuntimeConfig();
+      const mailApprovalProgressMatch = /^Senden freigeben:\s*Action\s+([1-9]\d*)$/u.exec(data);
+      let progressMessage: Awaited<ReturnType<typeof replyToCallbackChat>> | null = null;
+      if (mailApprovalProgressMatch) {
+        try {
+          progressMessage = await replyToCallbackChat(
+            `Mail Action ${mailApprovalProgressMatch[1]} wird gesendet ...`,
+          );
+        } catch (progressErr) {
+          logVerbose(
+            `telegram: failed to send mail approval progress message: ${String(progressErr)}`,
+          );
+        }
+      }
+      const mailApprovalCallback = await (
+        telegramDeps.sendMailApprovalCallback ?? sendTelegramMailApprovalCallback
+      )({
+        data,
+      });
+      if (mailApprovalCallback.handled) {
+        if (mailApprovalCallback.ok) {
+          try {
+            await clearCallbackButtons();
+          } catch (editErr) {
+            const errStr = String(editErr);
+            if (
+              !errStr.includes("message is not modified") &&
+              !errStr.includes("there is no text in the message to edit")
+            ) {
+              logVerbose(`telegram: failed to clear mail approval callback buttons: ${errStr}`);
+            }
+          }
+        }
+        if (progressMessage) {
+          try {
+            const progressChatId = progressMessage.chat?.id ?? callbackMessage.chat.id;
+            await bot.api.editMessageText(
+              progressChatId,
+              progressMessage.message_id,
+              mailApprovalCallback.text,
+              callbackBusinessParams,
+            );
+          } catch (editErr) {
+            logVerbose(
+              `telegram: failed to edit mail approval progress message: ${String(editErr)}`,
+            );
+            await replyToCallbackChat(mailApprovalCallback.text);
+          }
+        } else {
+          await replyToCallbackChat(mailApprovalCallback.text);
+        }
+        return;
+      }
       const pluginCallback = await dispatchTelegramPluginInteractiveHandler({
         data: pluginCallbackData,
         callbackId: callback.id,

@@ -95,6 +95,39 @@ import { prepareReplySessionParentFork } from "./session-parent-fork-prepare.js"
 import { clearSessionResetRuntimeState } from "./session-reset-cleanup.js";
 
 const log = createSubsystemLogger("session-init");
+const REPLY_SESSION_INIT_CONFLICT_RETRY_MARKER =
+  "openclaw-local-reply-session-init-conflict-retry-v1";
+const REPLY_SESSION_INIT_CONFLICT_RETRY_DELAYS_MS = [250, 750, 1500, 3000, 5000, 8000] as const;
+const replySessionInitializationLocks = new Map<string, Promise<void>>();
+
+function sleepReplySessionInitConflictRetry(delayMs: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, delayMs);
+  });
+}
+
+async function withReplySessionInitializationLock<T>(
+  lockKey: string,
+  run: () => Promise<T>,
+): Promise<T> {
+  const previous = replySessionInitializationLocks.get(lockKey) ?? Promise.resolve();
+  let releaseCurrent!: () => void;
+  const current = new Promise<void>((resolve) => {
+    releaseCurrent = resolve;
+  });
+  const queued = previous.catch(() => undefined).then(() => current);
+  replySessionInitializationLocks.set(lockKey, queued);
+
+  await previous.catch(() => undefined);
+  try {
+    return await run();
+  } finally {
+    releaseCurrent();
+    if (replySessionInitializationLocks.get(lockKey) === queued) {
+      replySessionInitializationLocks.delete(lockKey);
+    }
+  }
+}
 
 function stripThreadFromSessionRoute(route: SessionEntry["route"]): SessionEntry["route"] {
   const normalized = normalizeDeliveryChannelRoute(route);
@@ -335,7 +368,13 @@ async function initSessionStateAttempt(
   const attempt = await runExclusiveSessionStoreWrite(
     attemptContext.storePath,
     async () =>
-      await initSessionStateAttemptLocked(params, attemptContext, staleSnapshotRetried, undefined),
+      await initSessionStateAttemptLocked(
+        params,
+        attemptContext,
+        staleSnapshotRetried,
+        undefined,
+        0,
+      ),
   );
   if (attempt.kind === "complete") {
     return attempt.result;
@@ -357,7 +396,8 @@ async function initSessionStateAttempt(
         // before interrupting, then reacquire any refreshed identity first.
         const revalidated = await runExclusiveSessionStoreWrite(
           attemptContext.storePath,
-          async () => await initSessionStateAttemptLocked(params, attemptContext, false, undefined),
+          async () =>
+            await initSessionStateAttemptLocked(params, attemptContext, false, undefined, 0),
         );
         if (
           revalidated.kind === "complete" ||
@@ -386,7 +426,8 @@ async function initSessionStateAttempt(
         // must match this exact fenced identity before any rollover side effect.
         return await runExclusiveSessionStoreWrite(
           attemptContext.storePath,
-          async () => await initSessionStateAttemptLocked(params, attemptContext, false, candidate),
+          async () =>
+            await initSessionStateAttemptLocked(params, attemptContext, false, candidate, 0),
         );
       },
     });
@@ -402,6 +443,7 @@ async function initSessionStateAttemptLocked(
   attemptContext: InitSessionStateAttemptContext,
   staleSnapshotRetried: boolean,
   lifecycleMutationIdentity: { sessionId: string; sessionKey: string } | undefined,
+  conflictRetryIndex: number,
 ): Promise<InitSessionStateAttemptOutcome> {
   const { ctx, cfg, commandAuthorized } = params;
   const { agentId, conversationBindingContext, isSystemEvent, sessionCtxForState, storePath } =
@@ -988,46 +1030,70 @@ async function initSessionStateAttemptLocked(
     sessionEntry.skillsSnapshot = undefined;
   }
   // Archive old transcript so it doesn't accumulate on disk (#14869).
-  const committed = await commitReplySessionInitialization({
-    activeSessionKey: sessionKey,
-    agentId,
-    expectedRevision: initializationSnapshot.revision,
-    fallbackSessionFile,
-    maintenanceConfig,
-    onArchiveError: (error, sourcePath) => {
-      log.warn(
-        `failed to archive previous session transcript ${sourcePath} for session ${previousSessionEntry?.sessionId}`,
-        { error: String(error) },
-      );
-    },
-    onMaintenanceWarning: (warning) =>
-      deliverSessionMaintenanceWarning({
-        cfg,
-        sessionKey,
-        entry: sessionEntry,
-        warning,
-      }),
-    prepareSessionEntry: async ({ readEntry, sessionEntry: entryToCommit }) =>
-      await prepareReplySessionParentFork({
+  const committed = await withReplySessionInitializationLock(
+    `${storePath}\0${sessionKey}`,
+    async () =>
+      await commitReplySessionInitialization({
+        activeSessionKey: sessionKey,
         agentId,
-        alreadyForked,
-        parentSessionKey,
-        readEntry,
-        sessionEntry: entryToCommit,
+        expectedRevision: initializationSnapshot.revision,
+        fallbackSessionFile,
+        maintenanceConfig,
+        onArchiveError: (error, sourcePath) => {
+          log.warn(
+            `failed to archive previous session transcript ${sourcePath} for session ${previousSessionEntry?.sessionId}`,
+            { error: String(error) },
+          );
+        },
+        onMaintenanceWarning: (warning) =>
+          deliverSessionMaintenanceWarning({
+            cfg,
+            sessionKey,
+            entry: sessionEntry,
+            warning,
+          }),
+        prepareSessionEntry: async ({ readEntry, sessionEntry: entryToCommit }) =>
+          await prepareReplySessionParentFork({
+            agentId,
+            alreadyForked,
+            parentSessionKey,
+            readEntry,
+            sessionEntry: entryToCommit,
+            sessionKey,
+            storePath,
+            warn: (message) => log.warn(message),
+          }),
+        previousEntry: previousSessionEntry,
+        retiredEntry: retiredLegacyMainDelivery,
+        sessionEntry,
         sessionKey,
+        snapshotEntry: initializationSnapshot.currentEntry,
         storePath,
-        warn: (message) => log.warn(message),
       }),
-    previousEntry: previousSessionEntry,
-    retiredEntry: retiredLegacyMainDelivery,
-    sessionEntry,
-    sessionKey,
-    snapshotEntry: initializationSnapshot.currentEntry,
-    storePath,
-  });
+  );
   if (!committed.ok) {
     if (!staleSnapshotRetried) {
-      return await initSessionStateAttemptLocked(params, attemptContext, true, undefined);
+      return await initSessionStateAttemptLocked(
+        params,
+        attemptContext,
+        true,
+        lifecycleMutationIdentity,
+        conflictRetryIndex,
+      );
+    }
+    const delayMs = REPLY_SESSION_INIT_CONFLICT_RETRY_DELAYS_MS[conflictRetryIndex];
+    if (delayMs !== undefined) {
+      log.warn(
+        `${REPLY_SESSION_INIT_CONFLICT_RETRY_MARKER}: reply session initialization conflicted for ${sessionKey}; retrying after ${delayMs}ms (${conflictRetryIndex + 1}/${REPLY_SESSION_INIT_CONFLICT_RETRY_DELAYS_MS.length})`,
+      );
+      await sleepReplySessionInitConflictRetry(delayMs);
+      return await initSessionStateAttemptLocked(
+        params,
+        attemptContext,
+        true,
+        lifecycleMutationIdentity,
+        conflictRetryIndex + 1,
+      );
     }
     throw new Error(`reply session initialization conflicted for ${sessionKey}`);
   }

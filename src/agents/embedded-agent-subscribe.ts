@@ -9,6 +9,7 @@ import {
 } from "../../packages/markdown-core/src/code-spans.js";
 import type { FenceScanState } from "../../packages/markdown-core/src/fences.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
+import { shouldSuppressLiveMailActionClaim } from "../auto-reply/reply/mail-action-claim-guard.js";
 import { createStreamingDirectiveAccumulator } from "../auto-reply/reply/streaming-directives.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { formatToolAggregate } from "../auto-reply/tool-meta.js";
@@ -1096,6 +1097,11 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       if (slicedPrefixReplay) {
         markBlockReplyTextHandled();
       }
+      return;
+    }
+    if (cleanedText && shouldSuppressLiveMailActionClaim(cleanedText)) {
+      log.debug("Skipping live block reply with mail action claim pending final validation");
+      markBlockReplyTextHandled();
       return;
     }
     pushAssistantText(chunk);

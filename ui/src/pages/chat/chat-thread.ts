@@ -5,6 +5,7 @@ import {
 } from "../../../../src/chat/tool-content.js";
 import type {
   ChatItem,
+  MessageContentItem,
   MessageGroup,
   NormalizedMessage,
   ToolCard,
@@ -31,7 +32,11 @@ import {
   stripMessageDisplayMetadataText,
 } from "../../lib/chat/message-normalizer.ts";
 import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
-import { extractToolCardsCached, extractToolPreview } from "../../lib/chat/tool-cards.ts";
+import {
+  extractToolCardsCached,
+  extractToolPreview,
+  resolveMailDraftApprovalAction,
+} from "../../lib/chat/tool-cards.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import { getOrCreateSessionCacheValue } from "./session-cache.ts";
 import { buildUserChatMessageContentBlocks } from "./user-message-content.ts";
@@ -118,6 +123,36 @@ function appendCanvasBlockToAssistantMessage(
   };
 }
 
+type MailDraftApprovalBlock = Extract<MessageContentItem, { type: "mail_draft_approval" }>;
+
+function appendMailDraftApprovalBlockToAssistantMessage(
+  message: unknown,
+  approval: MailDraftApprovalBlock,
+) {
+  const raw = message as Record<string, unknown>;
+  const existingContent = Array.isArray(raw.content)
+    ? [...raw.content]
+    : typeof raw.content === "string"
+      ? [{ type: "text", text: raw.content }]
+      : typeof raw.text === "string"
+        ? [{ type: "text", text: raw.text }]
+        : [];
+  const alreadyHasApproval = existingContent.some((block) => {
+    if (!block || typeof block !== "object") {
+      return false;
+    }
+    const typed = block as { type?: unknown; confirmation?: unknown };
+    return typed.type === "mail_draft_approval" && typed.confirmation === approval.confirmation;
+  });
+  if (alreadyHasApproval) {
+    return message;
+  }
+  return {
+    ...raw,
+    content: [...existingContent, approval],
+  };
+}
+
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -177,6 +212,47 @@ function extractChatMessagePreview(toolMessage: unknown): {
     return null;
   }
   return { preview, text: text ?? null, timestamp: normalized.timestamp ?? null };
+}
+
+function extractMailDraftApproval(toolMessage: unknown): {
+  approval: MailDraftApprovalBlock;
+  timestamp: number | null;
+} | null {
+  const normalized = safeNormalizeMessage(toolMessage);
+  if (!normalized) {
+    return null;
+  }
+  const cards = extractToolCardsCached(toolMessage, "mail-approval");
+  for (const card of cards) {
+    const action = resolveMailDraftApprovalAction(card);
+    if (!action) {
+      continue;
+    }
+    return {
+      approval: {
+        type: "mail_draft_approval",
+        label: action.label,
+        confirmation: action.confirmation,
+      },
+      timestamp: normalized.timestamp ?? null,
+    };
+  }
+  return null;
+}
+
+function markMailDraftApprovalLifted(message: unknown): unknown {
+  const raw = asRecord(message);
+  if (!raw) {
+    return message;
+  }
+  const meta = asRecord(raw["__openclaw"]) ?? {};
+  return {
+    ...raw,
+    __openclaw: {
+      ...meta,
+      mailDraftApprovalLifted: true,
+    },
+  };
 }
 
 function findNearestAssistantMessageIndex(
@@ -872,6 +948,16 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     text: string | null;
     timestamp: number | null;
   }>;
+  const liftedMailDraftApprovals = tools
+    .map((tool, index) => {
+      const entry = extractMailDraftApproval(tool);
+      return entry ? { ...entry, toolIndex: index } : null;
+    })
+    .filter((entry) => Boolean(entry)) as Array<{
+    approval: MailDraftApprovalBlock;
+    timestamp: number | null;
+    toolIndex: number;
+  }>;
   const historyStart = resolveHistoryStartIndex(history, props.showToolCalls, historyRenderLimit);
   const hiddenHistoryCount = countVisibleHistoryMessages(
     history.slice(0, historyStart),
@@ -978,6 +1064,28 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       ),
     };
   }
+  const liftedMailDraftToolIndexes = new Set<number>();
+  for (const liftedMailDraftApproval of liftedMailDraftApprovals) {
+    const assistantIndex = findNearestAssistantMessageIndex(
+      items,
+      liftedMailDraftApproval.timestamp,
+    );
+    if (assistantIndex == null) {
+      continue;
+    }
+    const item = items[assistantIndex];
+    if (!item || item.kind !== "message") {
+      continue;
+    }
+    items[assistantIndex] = {
+      ...item,
+      message: appendMailDraftApprovalBlockToAssistantMessage(
+        item.message,
+        liftedMailDraftApproval.approval,
+      ),
+    };
+    liftedMailDraftToolIndexes.add(liftedMailDraftApproval.toolIndex);
+  }
   items = items.filter(
     (item) => item.kind !== "message" || hasRenderableNormalizedMessage(item.message),
   );
@@ -1032,7 +1140,9 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       items.push({
         kind: "message",
         key: tool.key,
-        message: tool.message,
+        message: liftedMailDraftToolIndexes.has(i)
+          ? markMailDraftApprovalLifted(tool.message)
+          : tool.message,
       });
     }
   }

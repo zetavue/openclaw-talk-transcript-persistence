@@ -109,6 +109,7 @@ export type ChatProps = {
   onHistoryKeydown?: (input: ChatInputHistoryKeyInput) => ChatInputHistoryKeyResult;
   onSlashIntent?: () => void | Promise<void>;
   onSend: () => void;
+  onSendMailDraftApproval?: (confirmation: string) => void | Promise<void>;
   onCompact?: () => void | Promise<void>;
   onOpenSessionCheckpoints?: () => void | Promise<void>;
   onToggleRealtimeTalk?: () => void;
@@ -187,6 +188,7 @@ export function renderChat(props: ChatProps) {
     onOpenSidebar: props.onOpenSidebar,
     onOpenWorkspaceFile: props.onOpenWorkspaceFile,
     onOpenSessionCheckpoints: props.onOpenSessionCheckpoints,
+    onSendMailDraftApproval: props.onSendMailDraftApproval,
     onAssistantAttachmentLoaded: props.onAssistantAttachmentLoaded,
     onRequestUpdate: requestUpdate,
     onScrollToBottom: props.onScrollToBottom,
@@ -284,41 +286,47 @@ export function renderChat(props: ChatProps) {
       }}
     >
       ${props.disabledReason ? html`<div class="callout">${props.disabledReason}</div>` : nothing}
-      ${props.error
-        ? html`
-            <div class="callout danger callout--dismissible" role="alert">
-              <span class="callout__content">${props.error}</span>
-              ${props.onDismissError
-                ? html`
-                    <openclaw-tooltip content="Dismiss error">
-                      <button
-                        class="callout__dismiss"
-                        type="button"
-                        @click=${props.onDismissError}
-                        aria-label="Dismiss error"
-                      >
-                        ${icons.x}
-                      </button>
-                    </openclaw-tooltip>
-                  `
-                : nothing}
-            </div>
-          `
-        : nothing}
-      ${props.focusMode && props.onToggleFocusMode
-        ? html`
-            <openclaw-tooltip content="Exit focus mode">
-              <button
-                class="chat-focus-exit"
-                type="button"
-                @click=${props.onToggleFocusMode}
-                aria-label="Exit focus mode"
-              >
-                ${icons.x}
-              </button>
-            </openclaw-tooltip>
-          `
-        : nothing}
+      ${
+        props.error
+          ? html`
+              <div class="callout danger callout--dismissible" role="alert">
+                <span class="callout__content">${props.error}</span>
+                ${
+                  props.onDismissError
+                    ? html`
+                        <openclaw-tooltip content="Dismiss error">
+                          <button
+                            class="callout__dismiss"
+                            type="button"
+                            @click=${props.onDismissError}
+                            aria-label="Dismiss error"
+                          >
+                            ${icons.x}
+                          </button>
+                        </openclaw-tooltip>
+                      `
+                    : nothing
+                }
+              </div>
+            `
+          : nothing
+      }
+      ${
+        props.focusMode && props.onToggleFocusMode
+          ? html`
+              <openclaw-tooltip content="Exit focus mode">
+                <button
+                  class="chat-focus-exit"
+                  type="button"
+                  @click=${props.onToggleFocusMode}
+                  aria-label="Exit focus mode"
+                >
+                  ${icons.x}
+                </button>
+              </openclaw-tooltip>
+            `
+          : nothing
+      }
       ${renderChatSearchBar(props.paneId, requestUpdate)}
       ${renderChatPinnedMessages(
         {
@@ -332,9 +340,9 @@ export function renderChat(props: ChatProps) {
       )}
 
       <div
-        class="chat-workbench ${props.sessionWorkspace?.collapsed
-          ? "chat-workbench--workspace-collapsed"
-          : ""}"
+        class="chat-workbench ${
+          props.sessionWorkspace?.collapsed ? "chat-workbench--workspace-collapsed" : ""
+        }"
       >
         ${renderSessionWorkspaceRail(props.sessionWorkspace)}
         <div class="chat-workbench__main">
@@ -346,27 +354,29 @@ export function renderChat(props: ChatProps) {
               ${thread} ${chatColumnFooter}
             </div>
 
-            ${sidebarOpen
-              ? html`
-                  <resizable-divider
-                    .splitRatio=${splitRatio}
-                    .label=${t("nav.resize")}
-                    @resize=${(event: CustomEvent) =>
-                      props.onSplitRatioChange?.(event.detail.splitRatio)}
-                  ></resizable-divider>
-                  <openclaw-chat-detail-panel
-                    class="chat-sidebar"
-                    .content=${props.sidebarContent ?? null}
-                    .loadFullMessage=${props.onLoadSidebarFullMessage ?? null}
-                    .canvasPluginSurfaceUrl=${props.canvasPluginSurfaceUrl ?? null}
-                    .embedSandboxMode=${props.embedSandboxMode ?? "scripts"}
-                    .allowExternalEmbedUrls=${props.allowExternalEmbedUrls ?? false}
-                    .onOpenWorkspaceFile=${props.onOpenWorkspaceFile ?? null}
-                    .onRevealInWorkspace=${props.onRevealWorkspaceFile ?? null}
-                    @chat-detail-panel-close=${() => props.onCloseSidebar?.()}
-                  ></openclaw-chat-detail-panel>
-                `
-              : nothing}
+            ${
+              sidebarOpen
+                ? html`
+                    <resizable-divider
+                      .splitRatio=${splitRatio}
+                      .label=${t("nav.resize")}
+                      @resize=${(event: CustomEvent) =>
+                        props.onSplitRatioChange?.(event.detail.splitRatio)}
+                    ></resizable-divider>
+                    <openclaw-chat-detail-panel
+                      class="chat-sidebar"
+                      .content=${props.sidebarContent ?? null}
+                      .loadFullMessage=${props.onLoadSidebarFullMessage ?? null}
+                      .canvasPluginSurfaceUrl=${props.canvasPluginSurfaceUrl ?? null}
+                      .embedSandboxMode=${props.embedSandboxMode ?? "scripts"}
+                      .allowExternalEmbedUrls=${props.allowExternalEmbedUrls ?? false}
+                      .onOpenWorkspaceFile=${props.onOpenWorkspaceFile ?? null}
+                      .onRevealInWorkspace=${props.onRevealWorkspaceFile ?? null}
+                      @chat-detail-panel-close=${() => props.onCloseSidebar?.()}
+                    ></openclaw-chat-detail-panel>
+                  `
+                : nothing
+            }
           </div>
         </div>
       </div>

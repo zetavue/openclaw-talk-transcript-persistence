@@ -379,6 +379,110 @@
 
 .chat-tool-card__raw-body {
   margin-top: 4px;
+  border-radius: var(--radius-md);
+  border: 1px solid color-mix(in srgb, var(--border) 75%, transparent);
+  background: color-mix(in srgb, var(--secondary) 82%, transparent);
+  font-size: 12px; /* was 11px */
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.chat-tool-card__block-preview,
+.chat-tool-card__block-empty {
+  color: var(--muted);
+}
+
+.chat-tool-card__block-content {
+  color: var(--text);
+  overflow: auto;
+  max-height: min(520px, 60vh);
+}
+
+.chat-tool-card__block-content code {
+  white-space: inherit;
+  overflow-wrap: anywhere;
+  word-break: inherit;
+}
+
+.chat-tool-card__inline {
+  margin-top: 10px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.chat-tool-card__block-preview {
+  overflow: hidden;
+  max-height: 52px;
+}
+
+.chat-tool-card__mail-approval {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+
+.chat-tool-card__mail-approval-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  max-width: 100%;
+  padding: 7px 12px;
+  border: 1px solid color-mix(in srgb, var(--ok) 55%, var(--border) 45%);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--ok) 14%, var(--card) 86%);
+  color: color-mix(in srgb, var(--ok) 82%, var(--text) 18%);
+  font: inherit;
+  font-size: var(--control-ui-text-sm);
+  font-weight: 600;
+  line-height: 1.2;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+  transition:
+    background 150ms ease-out,
+    border-color 150ms ease-out,
+    color 150ms ease-out;
+}
+
+.chat-tool-card__mail-approval-btn:hover,
+.chat-tool-card__mail-approval-btn:focus-visible {
+  border-color: color-mix(in srgb, var(--ok) 78%, var(--border-strong) 22%);
+  background: color-mix(in srgb, var(--ok) 20%, var(--card) 80%);
+  color: var(--text);
+}
+
+.chat-tools-summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+  user-select: none;
+  list-style: none;
+  transition:
+    color 150ms ease,
+    background 150ms ease;
+}
+
+.chat-tools-summary::-webkit-details-marker {
+  display: none;
+}
+
+.chat-tools-summary::before {
+  content: "▸";
+  font-size: 12px; /* was 10px */
+  flex-shrink: 0;
+  transition: transform 150ms ease;
+}
+
+.chat-tools-collapse[open] > .chat-tools-summary::before {
+  transform: rotate(90deg);
 }
 
 /* ── Inline JSON disclosure ── */

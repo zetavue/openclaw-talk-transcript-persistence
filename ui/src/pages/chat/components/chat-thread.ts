@@ -35,6 +35,7 @@ import {
 } from "./chat-message.ts";
 import { renderRealtimeTalkConversation } from "./chat-realtime-controls.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
+import type { MailDraftApprovalHandler } from "./chat-tool-cards.ts";
 import { renderWelcomeState, resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
 
 const pinnedMessagesMap = new Map<string, PinnedMessages>();
@@ -96,6 +97,7 @@ type ChatThreadProps = {
   onOpenSidebar?: (content: SidebarContent) => void;
   onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
   onOpenSessionCheckpoints?: () => void | Promise<void>;
+  onSendMailDraftApproval?: MailDraftApprovalHandler;
   onAssistantAttachmentLoaded?: () => void;
   onRequestUpdate?: () => void;
   onScrollToBottom?: () => void;
@@ -421,36 +423,38 @@ export function renderChatPinnedMessages(
           >${icons.chevronDown}</span
         >
       </button>
-      ${state.pinnedExpanded
-        ? html`
-            <div class="agent-chat__pinned-list">
-              ${entries.map(
-                ({ index, text, role }) => html`
-                  <div class="agent-chat__pinned-item">
-                    <span class="agent-chat__pinned-role"
-                      >${role === "user" ? userRoleLabel : "Assistant"}</span
-                    >
-                    <span class="agent-chat__pinned-text"
-                      >${text.slice(0, 100)}${text.length > 100 ? "..." : ""}</span
-                    >
-                    <openclaw-tooltip content="Unpin">
-                      <button
-                        class="btn btn--ghost"
-                        aria-label="Unpin"
-                        @click=${() => {
-                          pinned.unpin(index);
-                          requestUpdate();
-                        }}
+      ${
+        state.pinnedExpanded
+          ? html`
+              <div class="agent-chat__pinned-list">
+                ${entries.map(
+                  ({ index, text, role }) => html`
+                    <div class="agent-chat__pinned-item">
+                      <span class="agent-chat__pinned-role"
+                        >${role === "user" ? userRoleLabel : "Assistant"}</span
                       >
-                        ${icons.x}
-                      </button>
-                    </openclaw-tooltip>
-                  </div>
-                `,
-              )}
-            </div>
-          `
-        : nothing}
+                      <span class="agent-chat__pinned-text"
+                        >${text.slice(0, 100)}${text.length > 100 ? "..." : ""}</span
+                      >
+                      <openclaw-tooltip content="Unpin">
+                        <button
+                          class="btn btn--ghost"
+                          aria-label="Unpin"
+                          @click=${() => {
+                            pinned.unpin(index);
+                            requestUpdate();
+                          }}
+                        >
+                          ${icons.x}
+                        </button>
+                      </openclaw-tooltip>
+                    </div>
+                  `,
+                )}
+              </div>
+            `
+          : nothing
+      }
     </div>
   `;
 }
@@ -700,9 +704,11 @@ export function renderChatThread(props: ChatThreadProps) {
       <div class="chat-thread-inner">
         ${showLoadingSkeleton ? renderLoadingSkeleton() : nothing}
         ${isEmpty && !state.searchOpen ? renderWelcomeState(props) : nothing}
-        ${isEmpty && state.searchOpen
-          ? html` <div class="agent-chat__empty">No matching messages</div> `
-          : nothing}
+        ${
+          isEmpty && state.searchOpen
+            ? html` <div class="agent-chat__empty">No matching messages</div> `
+            : nothing
+        }
         ${guard(
           [
             chatItems,
@@ -739,29 +745,35 @@ export function renderChatThread(props: ChatThreadProps) {
                         <span class="chat-divider__label">${item.label}</span>
                         <span class="chat-divider__line"></span>
                       </div>
-                      ${item.description || item.action
-                        ? html`
-                            <div class="chat-divider__details">
-                              ${item.description
-                                ? html`<span class="chat-divider__description">
-                                    ${item.description}
-                                  </span>`
-                                : nothing}
-                              ${item.action?.kind === "session-checkpoints" &&
-                              props.onOpenSessionCheckpoints
-                                ? html`
-                                    <button
-                                      type="button"
-                                      class="btn btn--subtle btn--sm chat-divider__action"
-                                      @click=${() => props.onOpenSessionCheckpoints?.()}
-                                    >
-                                      ${item.action.label}
-                                    </button>
-                                  `
-                                : nothing}
-                            </div>
-                          `
-                        : nothing}
+                      ${
+                        item.description || item.action
+                          ? html`
+                              <div class="chat-divider__details">
+                                ${
+                                  item.description
+                                    ? html`<span class="chat-divider__description">
+                                        ${item.description}
+                                      </span>`
+                                    : nothing
+                                }
+                                ${
+                                  item.action?.kind === "session-checkpoints" &&
+                                  props.onOpenSessionCheckpoints
+                                    ? html`
+                                        <button
+                                          type="button"
+                                          class="btn btn--subtle btn--sm chat-divider__action"
+                                          @click=${() => props.onOpenSessionCheckpoints?.()}
+                                        >
+                                          ${item.action.label}
+                                        </button>
+                                      `
+                                    : nothing
+                                }
+                              </div>
+                            `
+                          : nothing
+                      }
                     </div>
                   `;
                 }
@@ -795,6 +807,7 @@ export function renderChatThread(props: ChatThreadProps) {
                     isToolExpanded: (toolCardId: string) =>
                       expandedToolCards.get(toolCardId) ?? false,
                     onToggleToolExpanded: toggleToolCardExpanded,
+                    onSendMailDraftApproval: props.onSendMailDraftApproval,
                     onRequestUpdate: requestUpdate,
                     onAssistantAttachmentLoaded: props.onAssistantAttachmentLoaded,
                     assistantName: props.assistantName,

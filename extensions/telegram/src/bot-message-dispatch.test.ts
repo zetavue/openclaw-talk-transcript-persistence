@@ -3122,6 +3122,40 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(editMessageTelegram).not.toHaveBeenCalled();
   });
 
+  it("preserves inline approval buttons on progress-mode final replies", async () => {
+    setupDraftStreams({ answerMessageId: 2001 });
+    const approval = "Senden freigeben: Action 197";
+    const buttons = [[{ text: "Senden freigeben", callback_data: approval, style: "success" }]];
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        {
+          text: `Draft ready\n\n${approval}`,
+          presentation: {
+            blocks: [
+              {
+                type: "buttons",
+                buttons: [{ label: "Senden freigeben", value: approval, style: "success" }],
+              },
+            ],
+          },
+        },
+        { kind: "final" },
+      );
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: { streaming: { mode: "progress" } },
+    });
+
+    expectDeliveredReply(0, {
+      text: `Draft ready\n\n${approval}`,
+      channelData: { telegram: { buttons } },
+    });
+  });
+
   function allDeliveredReplyTexts(): string[] {
     return deliverReplies.mock.calls.flatMap((call: unknown[]) =>
       ((call[0] as { replies?: Array<{ text?: string }> }).replies ?? []).map(

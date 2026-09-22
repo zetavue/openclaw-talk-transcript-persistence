@@ -2054,6 +2054,7 @@ export async function runReplyAgent(params: {
       buildReplyPayloads({
         config: cfg,
         payloads,
+        agentId: followupRun.run.agentId,
         isHeartbeat,
         didLogHeartbeatStrip,
         silentExpected: followupRun.run.silentExpected,

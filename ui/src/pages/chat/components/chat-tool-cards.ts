@@ -11,6 +11,7 @@ import {
   formatCollapsedToolPreviewText,
   formatCollapsedToolSummaryText,
   isToolCardError,
+  resolveMailDraftApprovalAction,
   type ToolPreview,
 } from "../../../lib/chat/tool-cards.ts";
 import {
@@ -23,6 +24,7 @@ import {
 import type { SidebarContent } from "./chat-sidebar.ts";
 
 type FullMessageRequest = NonNullable<SidebarContent["fullMessageRequest"]>;
+export type MailDraftApprovalHandler = (confirmation: string) => void | Promise<void>;
 
 export function shouldToggleSelectableDisclosure(event: MouseEvent): boolean {
   if (event.detail === 0) {
@@ -289,9 +291,11 @@ function renderCollapsedToolSummary(params: {
     >
       <span class="chat-tool-msg-summary__icon">${icon}</span>
       <span class="chat-tool-msg-summary__label">${displayLabel}</span>
-      ${displayName
-        ? html`<span class="chat-tool-msg-summary__names">${displayName}</span>`
-        : nothing}
+      ${
+        displayName
+          ? html`<span class="chat-tool-msg-summary__names">${displayName}</span>`
+          : nothing
+      }
     </button>
   `;
 }
@@ -340,6 +344,7 @@ export function renderToolCard(
     sessionKey?: string;
     agentId?: string;
     onOpenSidebar?: (content: SidebarContent) => void;
+    onSendMailDraftApproval?: MailDraftApprovalHandler;
     canvasPluginSurfaceUrl?: string | null;
     embedSandboxMode?: EmbedSandboxMode;
     allowExternalEmbedUrls?: boolean;
@@ -356,9 +361,9 @@ export function renderToolCard(
 
   return html`
     <div
-      class="chat-tool-msg-collapse chat-tool-msg-collapse--manual ${opts.expanded
-        ? "is-open"
-        : ""}"
+      class="chat-tool-msg-collapse chat-tool-msg-collapse--manual ${
+        opts.expanded ? "is-open" : ""
+      }"
     >
       ${renderCollapsedToolSummary({
         label: summary.label,
@@ -368,20 +373,23 @@ export function renderToolCard(
         isError,
         onToggleExpanded: () => opts.onToggleExpanded(card.id),
       })}
-      ${opts.expanded
-        ? html`
-            <div class="chat-tool-msg-body">
-              ${renderExpandedToolCardContent(
-                card,
-                opts.sessionKey,
-                opts.onOpenSidebar,
-                opts.canvasPluginSurfaceUrl,
-                opts.embedSandboxMode ?? "scripts",
-                opts.allowExternalEmbedUrls ?? false,
-              )}
-            </div>
-          `
-        : nothing}
+      ${
+        opts.expanded
+          ? html`
+              <div class="chat-tool-msg-body">
+                ${renderExpandedToolCardContent(
+                  card,
+                  opts.sessionKey,
+                  opts.onOpenSidebar,
+                  opts.canvasPluginSurfaceUrl,
+                  opts.embedSandboxMode ?? "scripts",
+                  opts.allowExternalEmbedUrls ?? false,
+                  opts.onSendMailDraftApproval,
+                )}
+              </div>
+            `
+          : nothing
+      }
     </div>
   `;
 }
@@ -393,6 +401,7 @@ export function renderExpandedToolCardContent(
   canvasPluginSurfaceUrl?: string | null,
   embedSandboxMode: EmbedSandboxMode = "scripts",
   allowExternalEmbedUrls = false,
+  onSendMailDraftApproval?: MailDraftApprovalHandler,
 ) {
   const display = resolveToolDisplay({ name: card.name, args: card.args });
   const detail = formatToolDetail(display);
@@ -420,51 +429,84 @@ export function renderExpandedToolCardContent(
         allowExternalEmbedUrls,
       })
     : nothing;
+  const mailDraftApprovalAction = onSendMailDraftApproval
+    ? resolveMailDraftApprovalAction(card)
+    : undefined;
 
   return html`
     <div class="chat-tool-card ${isError ? "chat-tool-card--error" : ""}">
-      ${detail || canOpenSidebar
-        ? html`
-            <div class="chat-tool-card__header">
-              ${detail ? html`<div class="chat-tool-card__detail">${detail}</div>` : nothing}
-              ${canOpenSidebar
-                ? html`
-                    <div class="chat-tool-card__actions">
-                      <openclaw-tooltip content="Open in the side panel">
-                        <button
-                          class="chat-tool-card__action-btn"
-                          type="button"
-                          @click=${() => onOpenSidebar?.(sidebarActionContent)}
-                          aria-label="Open tool details in side panel"
-                        >
-                          <span class="chat-tool-card__action-icon">${icons.panelRightOpen}</span>
-                        </button>
-                      </openclaw-tooltip>
-                    </div>
-                  `
-                : nothing}
-            </div>
-          `
-        : nothing}
-      ${hasInput
-        ? renderToolDataBlock({
-            label: "Tool input",
-            text: card.inputText!,
-          })
-        : nothing}
-      ${hasOutput
-        ? card.preview
-          ? html`${visiblePreview} ${renderRawOutputToggle(card.outputText!)}`
-          : renderToolDataBlock({
-              label: isError ? "Tool error" : "Tool output",
-              text: card.outputText!,
-            })
-        : isError
+      ${
+        detail || canOpenSidebar
+          ? html`
+              <div class="chat-tool-card__header">
+                ${detail ? html`<div class="chat-tool-card__detail">${detail}</div>` : nothing}
+                ${
+                  canOpenSidebar
+                    ? html`
+                        <div class="chat-tool-card__actions">
+                          <openclaw-tooltip content="Open in the side panel">
+                            <button
+                              class="chat-tool-card__action-btn"
+                              type="button"
+                              @click=${() => onOpenSidebar?.(sidebarActionContent)}
+                              aria-label="Open tool details in side panel"
+                            >
+                              <span class="chat-tool-card__action-icon"
+                                >${icons.panelRightOpen}</span
+                              >
+                            </button>
+                          </openclaw-tooltip>
+                        </div>
+                      `
+                    : nothing
+                }
+              </div>
+            `
+          : nothing
+      }
+      ${
+        hasInput
           ? renderToolDataBlock({
-              label: "Tool error",
-              text: "No output — tool failed.",
+              label: "Tool input",
+              text: card.inputText!,
             })
-          : nothing}
+          : nothing
+      }
+      ${
+        hasOutput
+          ? card.preview
+            ? html`${visiblePreview} ${renderRawOutputToggle(card.outputText!)}`
+            : renderToolDataBlock({
+                label: isError ? "Tool error" : "Tool output",
+                text: card.outputText!,
+              })
+          : isError
+            ? renderToolDataBlock({
+                label: "Tool error",
+                text: "No output — tool failed.",
+              })
+            : nothing
+      }
+      ${
+        mailDraftApprovalAction
+          ? html`
+              <div class="chat-tool-card__mail-approval">
+                <button
+                  class="chat-tool-card__mail-approval-btn"
+                  type="button"
+                  title="E-Mail senden freigeben"
+                  @click=${(event: Event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    void onSendMailDraftApproval?.(mailDraftApprovalAction.confirmation);
+                  }}
+                >
+                  ${mailDraftApprovalAction.label}
+                </button>
+              </div>
+            `
+          : nothing
+      }
     </div>
   `;
 }

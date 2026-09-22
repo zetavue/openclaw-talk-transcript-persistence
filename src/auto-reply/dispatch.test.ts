@@ -431,6 +431,158 @@ describe("withReplyDispatcher", () => {
     );
   });
 
+  it("adds Telegram approval buttons to mail approval source replies for any agent", async () => {
+    hoisted.getGlobalHookRunnerMock.mockReturnValue({
+      hasHooks: vi.fn(() => false),
+    });
+    hoisted.createReplyDispatcherMock.mockReturnValueOnce(createDispatcher([]));
+    hoisted.dispatchReplyFromConfigMock.mockResolvedValueOnce({ text: "ok" });
+
+    await dispatchInboundMessageWithDispatcher({
+      ctx: buildTestCtx({ Surface: "telegram", SessionKey: "agent:restaurant:session" }),
+      cfg: {} as OpenClawConfig,
+      dispatcherOptions: {
+        deliver: async () => undefined,
+      },
+      replyOptions: { runId: "run-mail-approval" },
+      replyResolver: async () => ({ text: "ok" }),
+    });
+
+    const dispatcherOptions = requireReplyDispatcherOptions();
+    if (!dispatcherOptions?.beforeDeliver) {
+      throw new Error("expected beforeDeliver hook");
+    }
+
+    const payload = await dispatcherOptions.beforeDeliver(
+      {
+        text:
+          "Draft registered for send (UID 10 -> Action 119)\n\n" +
+          "Approval phrase: Senden freigeben: Action 119",
+      },
+      { kind: "final" },
+    );
+
+    expect(payload).toEqual({
+      text:
+        "Draft registered for send (UID 10 -> Action 119)\n\n" +
+        "Approval phrase: Senden freigeben: Action 119",
+      presentation: {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              {
+                label: "Senden freigeben",
+                value: "Senden freigeben: Action 119",
+                style: "success",
+              },
+            ],
+          },
+        ],
+      },
+    });
+  });
+
+  it("adds dashboard approval buttons to mail approval source replies", async () => {
+    hoisted.getGlobalHookRunnerMock.mockReturnValue({
+      hasHooks: vi.fn(() => false),
+    });
+    hoisted.createReplyDispatcherMock.mockReturnValueOnce(createDispatcher([]));
+    hoisted.dispatchReplyFromConfigMock.mockResolvedValueOnce({ text: "ok" });
+
+    await dispatchInboundMessageWithDispatcher({
+      ctx: buildTestCtx({
+        Surface: "dashboard",
+        SessionKey: "agent:test:dashboard:28a12a83-2530-4c5a-8a16-e0e93cfccf3c",
+      }),
+      cfg: {} as OpenClawConfig,
+      dispatcherOptions: {
+        deliver: async () => undefined,
+      },
+      replyOptions: { runId: "run-mail-approval-dashboard" },
+      replyResolver: async () => ({ text: "ok" }),
+    });
+
+    const dispatcherOptions = requireReplyDispatcherOptions();
+    if (!dispatcherOptions?.beforeDeliver) {
+      throw new Error("expected beforeDeliver hook");
+    }
+
+    const payload = await dispatcherOptions.beforeDeliver(
+      {
+        text: "Draft UID 13 registered as Action 124.\n\nSenden freigeben: Action 124",
+      },
+      { kind: "final" },
+    );
+
+    expect(payload.presentation).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Senden freigeben",
+              value: "Senden freigeben: Action 124",
+              style: "success",
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("adds webchat approval buttons to mail approval source replies", async () => {
+    hoisted.getGlobalHookRunnerMock.mockReturnValue({
+      hasHooks: vi.fn(() => false),
+    });
+    hoisted.createReplyDispatcherMock.mockReturnValueOnce(createDispatcher([]));
+    hoisted.dispatchReplyFromConfigMock.mockResolvedValueOnce({ text: "ok" });
+
+    await dispatchInboundMessageWithDispatcher({
+      ctx: buildTestCtx({
+        Surface: "webchat",
+        SessionKey: "agent:restaurant:dashboard:5e9346d6-1a57-437c-be75-c22f8216c5ab",
+      }),
+      cfg: {} as OpenClawConfig,
+      dispatcherOptions: {
+        deliver: async () => undefined,
+      },
+      replyOptions: { runId: "run-mail-approval-webchat" },
+      replyResolver: async () => ({ text: "ok" }),
+    });
+
+    const dispatcherOptions = requireReplyDispatcherOptions();
+    if (!dispatcherOptions?.beforeDeliver) {
+      throw new Error("expected beforeDeliver hook");
+    }
+
+    const payload = await dispatcherOptions.beforeDeliver(
+      {
+        text:
+          "**Send-Aktion registriert.**\n\n" +
+          "Der Draft (UID 8525) wurde als versandbereit markiert.\n\n" +
+          "**Action ID:** 125\n\n" +
+          "- `Senden freigeben: Action 125`",
+      },
+      { kind: "final" },
+    );
+
+    expect(payload.presentation).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Senden freigeben",
+              value: "Senden freigeben: Action 125",
+              style: "success",
+            },
+          ],
+        },
+      ],
+    });
+  });
+
   it("correlates reply_payload_sending usageState with the generated run id", async () => {
     const usageState = { provider: "openai", model: "gpt-5.5" };
     const runReplyPayloadSending = vi.fn(async ({ payload }: { payload: { text?: string } }) => ({

@@ -1385,6 +1385,26 @@ describe("createOpenClawCodingTools", () => {
     expect(toolNameList(tools)).toContain("skill_workshop");
   });
 
+  it("keeps structured mail draft creation available for the restaurant agent under the coding profile", () => {
+    const tools = createOpenClawCodingTools({
+      agentId: "restaurant",
+      config: { tools: { profile: "coding" } },
+    });
+
+    expect(toolNameList(tools)).toContain("mail_create_draft");
+    expect(toolNameList(tools)).toContain("mail_register_draft_send");
+  });
+
+  it("keeps structured mail draft creation available for non-restaurant agents by default", () => {
+    const tools = createOpenClawCodingTools({
+      agentId: "main",
+      config: { tools: { profile: "coding" } },
+    });
+
+    expect(toolNameList(tools)).toContain("mail_create_draft");
+    expect(toolNameList(tools)).toContain("mail_register_draft_send");
+  });
+
   it("can keep message available when a cron route needs it under a provider coding profile", () => {
     const providerProfileTools = createOpenClawCodingTools({
       config: { tools: { byProvider: { openai: { profile: "coding" } } } },

@@ -74,6 +74,10 @@ function expectTextContent(value: unknown, text: string) {
   expect(content.text).toBe(text);
 }
 
+function expectDetailsStatus(value: unknown, status: string) {
+  expect(requireRecord(value, "result details").status).toBe(status);
+}
+
 describe("process tool supervisor cancellation", () => {
   beforeAll(async () => {
     ({ addSession, getFinishedSession, getSession, resetProcessRegistryForTests } =
@@ -109,6 +113,7 @@ describe("process tool supervisor cancellation", () => {
 
     expect(supervisorMock.cancel).toHaveBeenCalledWith("sess", "manual-cancel");
     expectSessionState("sess", { exited: false });
+    expectDetailsStatus(result.details, "completed");
     expectTextContent(result.content[0], "Termination requested for session sess.");
   });
 
@@ -128,6 +133,7 @@ describe("process tool supervisor cancellation", () => {
     expect(supervisorMock.cancel).toHaveBeenCalledWith("sess", "manual-cancel");
     expect(getSession("sess")).toBeUndefined();
     expect(getFinishedSession("sess")).toBeUndefined();
+    expectDetailsStatus(result.details, "completed");
     expectTextContent(result.content[0], "Removed session sess (termination requested).");
   });
 

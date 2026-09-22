@@ -754,48 +754,54 @@ class ChatPane extends LitElement {
           </select>
         </label>
         <div class="chat-pane__actions">
-          ${this.onSplitDown
-            ? html`
-                <openclaw-tooltip .content=${t("chat.splitView.splitDown")}>
-                  <button
-                    class="btn btn--ghost btn--icon"
-                    type="button"
-                    aria-label=${t("chat.splitView.splitDown")}
-                    @click=${() => this.onSplitDown?.(this.paneId)}
-                  >
-                    ${icons.panelBottomOpen}
-                  </button>
-                </openclaw-tooltip>
-              `
-            : null}
-          ${this.onSplitRight
-            ? html`
-                <openclaw-tooltip .content=${t("chat.splitView.splitRight")}>
-                  <button
-                    class="btn btn--ghost btn--icon"
-                    type="button"
-                    aria-label=${t("chat.splitView.splitRight")}
-                    @click=${() => this.onSplitRight?.(this.paneId)}
-                  >
-                    ${icons.panelRightOpen}
-                  </button>
-                </openclaw-tooltip>
-              `
-            : null}
-          ${this.onClosePane
-            ? html`
-                <openclaw-tooltip .content=${t("chat.splitView.closePane")}>
-                  <button
-                    class="btn btn--ghost btn--icon"
-                    type="button"
-                    aria-label=${t("chat.splitView.closePane")}
-                    @click=${() => this.onClosePane?.(this.paneId)}
-                  >
-                    ${icons.x}
-                  </button>
-                </openclaw-tooltip>
-              `
-            : null}
+          ${
+            this.onSplitDown
+              ? html`
+                  <openclaw-tooltip .content=${t("chat.splitView.splitDown")}>
+                    <button
+                      class="btn btn--ghost btn--icon"
+                      type="button"
+                      aria-label=${t("chat.splitView.splitDown")}
+                      @click=${() => this.onSplitDown?.(this.paneId)}
+                    >
+                      ${icons.panelBottomOpen}
+                    </button>
+                  </openclaw-tooltip>
+                `
+              : null
+          }
+          ${
+            this.onSplitRight
+              ? html`
+                  <openclaw-tooltip .content=${t("chat.splitView.splitRight")}>
+                    <button
+                      class="btn btn--ghost btn--icon"
+                      type="button"
+                      aria-label=${t("chat.splitView.splitRight")}
+                      @click=${() => this.onSplitRight?.(this.paneId)}
+                    >
+                      ${icons.panelRightOpen}
+                    </button>
+                  </openclaw-tooltip>
+                `
+              : null
+          }
+          ${
+            this.onClosePane
+              ? html`
+                  <openclaw-tooltip .content=${t("chat.splitView.closePane")}>
+                    <button
+                      class="btn btn--ghost btn--icon"
+                      type="button"
+                      aria-label=${t("chat.splitView.closePane")}
+                      @click=${() => this.onClosePane?.(this.paneId)}
+                    >
+                      ${icons.x}
+                    </button>
+                  </openclaw-tooltip>
+                `
+              : null
+          }
         </div>
       </div>
     `;
@@ -950,6 +956,7 @@ class ChatPane extends LitElement {
         state.requestUpdate?.();
       },
       onSend: () => void state.handleSendChat(),
+      onSendMailDraftApproval: (confirmation) => void state.handleSendChat(confirmation),
       onCompact: () => void state.handleSendChat("/compact"),
       onOpenSessionCheckpoints: () => {
         const search = new URLSearchParams({ session: state.sessionKey });

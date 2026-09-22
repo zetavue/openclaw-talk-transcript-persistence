@@ -678,7 +678,7 @@ export function createProcessTool(
               },
             ],
             details: {
-              status: "failed",
+              status: canceled ? "completed" : "failed",
               name: scopedSession ? deriveSessionName(scopedSession.command) : undefined,
             },
           };
@@ -732,7 +732,7 @@ export function createProcessTool(
                 },
               ],
               details: {
-                status: "failed",
+                status: canceled ? "completed" : "failed",
                 name: scopedSession ? deriveSessionName(scopedSession.command) : undefined,
               },
             };

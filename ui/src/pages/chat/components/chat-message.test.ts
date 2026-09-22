@@ -430,17 +430,17 @@ function stubDeleteConfirmGeometry(params: {
     offsetTop: params.viewport.top ?? 0,
     width: params.viewport.width,
   });
-  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
-    function (this: HTMLElement) {
-      if (this.classList.contains("chat-group-delete")) {
-        return domRect(params.trigger);
-      }
-      if (this.classList.contains("chat-delete-confirm")) {
-        return domRect(params.popover);
-      }
-      return domRect({});
-    },
-  );
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
+    this: HTMLElement,
+  ) {
+    if (this.classList.contains("chat-group-delete")) {
+      return domRect(params.trigger);
+    }
+    if (this.classList.contains("chat-delete-confirm")) {
+      return domRect(params.popover);
+    }
+    return domRect({});
+  });
 }
 
 function clickDeleteButtonIconPath(deleteButton: HTMLButtonElement) {
@@ -1395,6 +1395,181 @@ describe("grouped chat rendering", () => {
       '{\n  "url": "https://example.com"\n}',
       "Opened page",
     ]);
+  });
+
+  it("expands mail draft approval tool messages and routes button clicks", () => {
+    const container = document.createElement("div");
+    const onSendMailDraftApproval = vi.fn();
+    const message = {
+      id: "assistant-mail-draft",
+      role: "assistant",
+      toolCallId: "call-mail-draft",
+      content: [
+        {
+          type: "toolresult",
+          id: "call-mail-draft",
+          name: "mail_create_draft",
+          text: JSON.stringify({
+            ok: true,
+            action_id: 78,
+            short_approval: "Senden freigeben: Action 78",
+            send_buttons: [
+              [
+                {
+                  text: "Senden freigeben",
+                  callback_data: "Senden freigeben: Action 78",
+                  style: "success",
+                },
+              ],
+            ],
+          }),
+        },
+      ],
+      timestamp: Date.now(),
+    };
+
+    renderAssistantMessage(container, message, {
+      onSendMailDraftApproval,
+    });
+
+    const button = expectElement(
+      container,
+      ".chat-tool-card__mail-approval-btn",
+      HTMLButtonElement,
+    );
+    button.click();
+
+    expect(onSendMailDraftApproval).toHaveBeenCalledWith("Senden freigeben: Action 78");
+  });
+
+  it("shows mail draft approval buttons even when tool calls are hidden", () => {
+    const container = document.createElement("div");
+    const onSendMailDraftApproval = vi.fn();
+    const message = {
+      id: "assistant-mail-draft-hidden-tools",
+      role: "assistant",
+      toolCallId: "call-mail-draft-hidden-tools",
+      content: [
+        {
+          type: "toolresult",
+          id: "call-mail-draft-hidden-tools",
+          name: "mail_create_draft",
+          text: JSON.stringify({
+            ok: true,
+            action_id: 79,
+            short_approval: "Senden freigeben: Action 79",
+            send_buttons: [
+              [
+                {
+                  text: "Senden freigeben",
+                  callback_data: "Senden freigeben: Action 79",
+                  style: "success",
+                },
+              ],
+            ],
+          }),
+        },
+      ],
+      timestamp: Date.now(),
+    };
+
+    renderAssistantMessage(container, message, {
+      onSendMailDraftApproval,
+      showToolCalls: false,
+    });
+
+    const button = expectElement(
+      container,
+      ".chat-tool-card__mail-approval-btn",
+      HTMLButtonElement,
+    );
+    button.click();
+
+    expect(onSendMailDraftApproval).toHaveBeenCalledWith("Senden freigeben: Action 79");
+  });
+
+  it("renders mail draft approval directly below draft text", () => {
+    const container = document.createElement("div");
+    const onSendMailDraftApproval = vi.fn();
+    const message = {
+      id: "assistant-mail-draft-with-text",
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "ENTWURF - NICHT AUTOMATISCH SENDEN\n\nSehr geehrte Frau Muster,\n\nvielen Dank.",
+        },
+        {
+          type: "toolresult",
+          id: "call-mail-draft-with-text",
+          name: "mail_create_draft",
+          text: JSON.stringify({
+            ok: true,
+            action_id: 80,
+            short_approval: "Senden freigeben: Action 80",
+            send_buttons: [
+              [
+                {
+                  text: "Senden freigeben",
+                  callback_data: "Senden freigeben: Action 80",
+                  style: "success",
+                },
+              ],
+            ],
+          }),
+        },
+      ],
+      timestamp: Date.now(),
+    };
+
+    renderAssistantMessage(container, message, {
+      onSendMailDraftApproval,
+      showToolCalls: false,
+    });
+
+    const markdown = expectElement(container, ".chat-text", HTMLDivElement);
+    const approval = expectElement(container, ".chat-mail-draft-approval", HTMLDivElement);
+    expect(markdown.nextElementSibling).toBe(approval);
+
+    const button = expectElement(approval, ".chat-tool-card__mail-approval-btn", HTMLButtonElement);
+    button.click();
+
+    expect(onSendMailDraftApproval).toHaveBeenCalledWith("Senden freigeben: Action 80");
+  });
+
+  it("renders lifted mail draft approval content directly below draft text", () => {
+    const container = document.createElement("div");
+    const onSendMailDraftApproval = vi.fn();
+    const message = {
+      id: "assistant-mail-draft-with-lifted-approval",
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "ENTWURF - NICHT AUTOMATISCH SENDEN\n\nSehr geehrte Frau Muster,\n\nvielen Dank.",
+        },
+        {
+          type: "mail_draft_approval",
+          label: "Senden freigeben",
+          confirmation: "Senden freigeben: Action 81",
+        },
+      ],
+      timestamp: Date.now(),
+    };
+
+    renderAssistantMessage(container, message, {
+      onSendMailDraftApproval,
+      showToolCalls: false,
+    });
+
+    const markdown = expectElement(container, ".chat-text", HTMLDivElement);
+    const approval = expectElement(container, ".chat-mail-draft-approval", HTMLDivElement);
+    expect(markdown.nextElementSibling).toBe(approval);
+
+    const button = expectElement(approval, ".chat-tool-card__mail-approval-btn", HTMLButtonElement);
+    button.click();
+
+    expect(onSendMailDraftApproval).toHaveBeenCalledWith("Senden freigeben: Action 81");
   });
 
   it("renders expanded standalone tool-call rows", () => {
