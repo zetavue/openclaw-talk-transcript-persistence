@@ -85,6 +85,12 @@ import {
   TOOL_SEARCH_RAW_TOOL_NAME,
 } from "./tool-search.js";
 import { replaceWithEffectiveCronCreatorToolAllowlist } from "./tools/cron-tool.js";
+import {
+  createMailCreateDraftTool,
+  createMailRegisterDraftSendTool,
+  MAIL_CREATE_DRAFT_TOOL_NAME,
+  MAIL_REGISTER_DRAFT_SEND_TOOL_NAME,
+} from "./tools/mail-draft-tool.js";
 import { prepareSessionPortalToolAccess } from "./tools/session-portal-target.js";
 
 export { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js";
@@ -183,6 +189,7 @@ export function createOpenClawCodingToolsInternal(
     const normalized = normalizeToolPolicyName(toolName);
     return normalized === "*" || normalized === "message";
   });
+  const forceStructuredMailDraftTool = true;
   // The verified requester profile owns completion authority; its delivery grant
   // stays source-bound even when parent tools remain available to the turn.
   const sourceReplyOnly =
@@ -197,6 +204,9 @@ export function createOpenClawCodingToolsInternal(
     ...(options && messageToolOwnsVisibleReply(options) ? ["message"] : []),
     ...(runtimeToolAllowlistIncludesMessage ? ["message"] : []),
     ...(forceHeartbeatTool ? [HEARTBEAT_RESPONSE_TOOL_NAME] : []),
+    ...(forceStructuredMailDraftTool
+      ? [MAIL_CREATE_DRAFT_TOOL_NAME, MAIL_REGISTER_DRAFT_SEND_TOOL_NAME]
+      : []),
     ...toolSearchControlAllowlist,
   ];
   const sandboxWorkspaceMediaReadAllowed = isConversationToolAllowed(capabilityProfile, "read");
@@ -486,6 +496,10 @@ export function createOpenClawCodingToolsInternal(
           executeTool: options?.toolSearchCatalogExecutor,
         })
       : [];
+  const mailDraftTools =
+    includeOpenClawTools && forceStructuredMailDraftTool
+      ? [createMailCreateDraftTool(), createMailRegisterDraftSendTool()]
+      : [];
   const scheduledCoreTools = scheduledExecTarget
     ? coreTools.map((tool) =>
         tool.name === "exec"
@@ -607,6 +621,7 @@ export function createOpenClawCodingToolsInternal(
           }),
         )
       : pluginToolsOnly),
+    ...mailDraftTools,
     ...toolSearchTools,
   ];
   options?.recordToolPrepStage?.("openclaw-tools");

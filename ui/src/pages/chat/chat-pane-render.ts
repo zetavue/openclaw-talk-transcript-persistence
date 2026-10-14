@@ -585,6 +585,7 @@ export class ChatPane extends ChatPaneLayoutRender {
         suggestionViewer || catalogKey
           ? undefined
           : (command) => void state.handleSendChat(command),
+      onSendMailDraftApproval: (confirmation) => void state.handleSendChat(confirmation),
       showNewMessages: state.chatNewMessagesBelow,
       onScrollToBottom: state.scrollToBottom,
       ...this.chatState.attachmentInputProps(state),

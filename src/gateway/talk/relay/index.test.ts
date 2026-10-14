@@ -838,7 +838,7 @@ describe("talk realtime gateway relay", () => {
     ["main", "agent:main:work", "work", "per-sender" as const],
     ["agent:main:main", "global", "main", "global" as const],
   ])(
-    "appends relay transcripts from %s to %s",
+    "deduplicates relay transcript retries and retains later identical exchanges from %s to %s",
     async (sessionKey, canonicalKey, mainKey, scope) => {
       const outerStateAdmission = captureOpenClawStateDatabaseReadAdmission(
         resolveOpenClawStateSqlitePath(),
@@ -874,6 +874,10 @@ describe("talk realtime gateway relay", () => {
           sessionKey,
         });
         bridgeRequest?.onTranscript?.("user", "relay hello", true);
+        bridgeRequest?.onTranscript?.("user", "relay hello", true);
+        bridgeRequest?.onTranscript?.("assistant", "relay response", true);
+        bridgeRequest?.onTranscript?.("assistant", "relay response", true);
+        bridgeRequest?.onTranscript?.("user", "relay hello", true);
         bridgeRequest?.onTranscript?.("assistant", "relay response", true);
         await flushTalkRealtimeRelayVoiceWrites({
           relaySessionId: session.relaySessionId,
@@ -890,7 +894,7 @@ describe("talk realtime gateway relay", () => {
           sessionKey,
           origin: "relay",
         });
-        expect(events).toHaveLength(2);
+        expect(events).toHaveLength(4);
         expect(events[0]?.event).toMatchObject({
           id: `voice:${session.relaySessionId}:1`,
           message: { role: "user", content: [{ type: "text", text: "relay hello" }] },
@@ -903,6 +907,17 @@ describe("talk realtime gateway relay", () => {
             api: "realtime",
             provider: "relay-test",
             model: "realtime-voice",
+          },
+        });
+        expect(events[2]?.event).toMatchObject({
+          id: `voice:${session.relaySessionId}:3`,
+          message: { role: "user", content: [{ type: "text", text: "relay hello" }] },
+        });
+        expect(events[3]?.event).toMatchObject({
+          id: `voice:${session.relaySessionId}:4`,
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "relay response" }],
           },
         });
         stopTalkRealtimeRelaySession({

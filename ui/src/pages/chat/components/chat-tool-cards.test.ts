@@ -677,6 +677,73 @@ describe("tool-cards", () => {
     ]);
   });
 
+  it("renders a mail draft approval button from send button tool output", () => {
+    const container = document.createElement("div");
+    const onSendMailDraftApproval = vi.fn();
+    render(
+      renderToolCard(
+        {
+          id: "msg:mail-draft:call-1",
+          name: "mail_create_draft",
+          outputText: JSON.stringify({
+            ok: true,
+            action_id: 78,
+            short_approval: "Senden freigeben: Action 78",
+            send_buttons: [
+              [
+                {
+                  text: "Senden freigeben",
+                  callback_data: "Senden freigeben: Action 78",
+                  style: "success",
+                },
+              ],
+            ],
+          }),
+        },
+        { expanded: true, onToggleExpanded: vi.fn(), onSendMailDraftApproval },
+      ),
+      container,
+    );
+
+    const button = container.querySelector<HTMLButtonElement>(".chat-tool-card__mail-approval-btn");
+    expect(button?.textContent?.trim()).toBe("Senden freigeben");
+
+    button?.click();
+
+    expect(onSendMailDraftApproval).toHaveBeenCalledWith("Senden freigeben: Action 78");
+  });
+
+  it("renders a mail draft approval button from legacy create_draft exec output", () => {
+    const container = document.createElement("div");
+    const onSendMailDraftApproval = vi.fn();
+    render(
+      renderToolCard(
+        {
+          id: "msg:mail-draft:exec-1",
+          name: "exec",
+          outputText: [
+            "action_id=123",
+            "draft=/home/openclaw/.openclaw/workspace-mail/drafts/000123-Angebot.md",
+            "draft_md=/home/openclaw/.openclaw/workspace-mail/drafts/000123-Angebot.md",
+            "draft_html=/home/openclaw/.openclaw/workspace-mail/drafts/000123-Angebot.html",
+            "draft_eml=/home/openclaw/.openclaw/workspace-mail/drafts/000123-Angebot.eml",
+            "approval=Senden freigeben: Angebot",
+            "short_approval=Senden freigeben: Action 123",
+          ].join("\n"),
+        },
+        { expanded: true, onToggleExpanded: vi.fn(), onSendMailDraftApproval },
+      ),
+      container,
+    );
+
+    const button = container.querySelector<HTMLButtonElement>(".chat-tool-card__mail-approval-btn");
+    expect(button?.textContent?.trim()).toBe("Senden freigeben");
+
+    button?.click();
+
+    expect(onSendMailDraftApproval).toHaveBeenCalledWith("Senden freigeben: Action 123");
+  });
+
   it("labels collapsed tool calls with the display summary", () => {
     const container = document.createElement("div");
     render(

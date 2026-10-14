@@ -272,6 +272,7 @@ export async function prepareReplyAgentPayloads(state: {
     buildReplyPayloads({
       config: cfg,
       payloads,
+      agentId: followupRun.run.agentId,
       conversationContext: sessionCtx.agentText ?? sessionCtx.BodyForAgent,
       isHeartbeat,
       didLogHeartbeatStrip,

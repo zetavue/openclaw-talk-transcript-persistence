@@ -7,6 +7,7 @@ import {
 } from "../../packages/markdown-core/src/code-spans.js";
 import type { FenceScanState } from "../../packages/markdown-core/src/fences.js";
 import { setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
+import { shouldSuppressLiveMailActionClaim } from "../auto-reply/reply/mail-action-claim-guard.js";
 import type { ReplyDirectiveParseResult } from "../auto-reply/reply/reply-directives.js";
 import { createStreamingDirectiveAccumulator } from "../auto-reply/reply/streaming-directives.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
@@ -523,6 +524,11 @@ export function createStreamRendering({
       if (slicedPrefixReplay) {
         markBlockReplyTextHandled();
       }
+      return;
+    }
+    if (cleanedText && shouldSuppressLiveMailActionClaim(cleanedText)) {
+      log.debug("Skipping live block reply with mail action claim pending final validation");
+      markBlockReplyTextHandled();
       return;
     }
     pushAssistantText(chunk, normalizedChunk);

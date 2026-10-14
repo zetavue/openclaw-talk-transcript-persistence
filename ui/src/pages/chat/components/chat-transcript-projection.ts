@@ -325,6 +325,7 @@ export function projectChatTranscript(
       ? (target) => state.transcriptRenderContext.onSetReply?.(target)
       : undefined,
     onOpenSidebar: props.onOpenSidebar,
+    onSendMailDraftApproval: props.onSendMailDraftApproval,
     sessionKey: props.sessionKey,
     boardProvider: props.boardProvider,
     agentId: props.currentAgentId ?? props.fullMessageAgentId,

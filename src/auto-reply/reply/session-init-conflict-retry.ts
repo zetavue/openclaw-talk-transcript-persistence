@@ -23,7 +23,7 @@ function isReplySessionInitConflictError(error: unknown): boolean {
   );
 }
 
-const SESSION_INIT_CONFLICT_MAX_ATTEMPTS = 5;
+const SESSION_INIT_CONFLICT_MAX_ATTEMPTS = 8;
 const SESSION_INIT_CONFLICT_BACKOFF_POLICY = {
   initialMs: 250,
   maxMs: 4_000,

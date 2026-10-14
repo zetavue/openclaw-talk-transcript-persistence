@@ -20,6 +20,7 @@ import type { GatewayRequestContext } from "../../server-methods/shared-types.js
 import type { TalkAgentConsultAuthority } from "../client-gateway-control.js";
 import type { PreparedTalkSessionTarget } from "../session-target.types.js";
 import type { RelayToolCallLedger } from "./tool-call-ledger.js";
+import type { RelayFinalTranscriptDedupeState } from "./transcript-dedupe.js";
 
 export const RELAY_SESSION_TTL_MS = 30 * 60 * 1000;
 export const MAX_AUDIO_BASE64_BYTES = 512 * 1024;
@@ -285,6 +286,7 @@ export type RelaySession = {
   voiceConfig?: OpenClawConfig;
   voiceSessionCreated: boolean;
   voiceTranscriptSeq: number;
+  finalTranscriptDedupeState: RelayFinalTranscriptDedupeState;
   voiceTranscriptQueue: BoundedSerialQueue;
   confirmationReadiness: ReturnType<typeof createClientVoiceConfirmationReadiness>;
   voiceSessionClose?: Promise<void>;

@@ -129,6 +129,89 @@ function assertCompatibleAnnounceTarget(params: {
   }
 }
 
+const OPENCLAW_LOCAL_CRON_TELEGRAM_DELIVERY_VALIDATION_MARKER =
+  "openclaw-local-cron-telegram-delivery-validation-v1";
+
+function resolveTelegramCronDeliveryAccountToken(params: {
+  cfg: OpenClawConfig;
+  accountId?: string;
+}): boolean {
+  const telegram = params.cfg.channels?.telegram;
+  if (!telegram || typeof telegram !== "object" || Array.isArray(telegram)) {
+    return false;
+  }
+  const resolveAccountToken = (account: unknown): boolean => {
+    if (!account || typeof account !== "object" || Array.isArray(account)) {
+      return false;
+    }
+    const { botToken, tokenFile } = account as {
+      botToken?: unknown;
+      tokenFile?: unknown;
+    };
+    return Boolean(
+      (typeof botToken === "string" && botToken.trim()) ||
+      (typeof tokenFile === "string" && tokenFile.trim()) ||
+      (botToken && typeof botToken === "object") ||
+      (tokenFile && typeof tokenFile === "object"),
+    );
+  };
+  const accountId = params.accountId?.trim();
+  if (!accountId || accountId === "default") {
+    if (resolveAccountToken(telegram)) {
+      return true;
+    }
+    return resolveAccountToken(telegram.accounts?.default);
+  }
+  return resolveAccountToken(telegram.accounts?.[accountId]);
+}
+
+function stripTelegramCronTargetPrefix(to: string): string {
+  let value = to.trim();
+  while (true) {
+    const next = value
+      .replace(/^(telegram|tg):/iu, "")
+      .replace(/^group:/iu, "")
+      .trim();
+    if (next === value) {
+      return value;
+    }
+    value = next;
+  }
+}
+
+function assertValidTelegramCronTarget(params: {
+  cfg: OpenClawConfig;
+  delivery?: Pick<CronDelivery, "channel" | "to" | "accountId">;
+  field: "delivery" | "delivery.failureDestination";
+}) {
+  const delivery = params.delivery;
+  const channel = delivery ? resolveAnnounceValidationChannel(delivery) : undefined;
+  if (!delivery || channel !== "telegram") {
+    return;
+  }
+  if (
+    !resolveTelegramCronDeliveryAccountToken({ cfg: params.cfg, accountId: delivery.accountId })
+  ) {
+    const accountId = delivery.accountId?.trim() || "default";
+    throw new Error(
+      `${OPENCLAW_LOCAL_CRON_TELEGRAM_DELIVERY_VALIDATION_MARKER}: ${params.field}.accountId references Telegram account "${accountId}", but that account has no bot token configured`,
+    );
+  }
+  const target = delivery.to?.trim();
+  if (!target) {
+    return;
+  }
+  const stripped = stripTelegramCronTargetPrefix(target);
+  if (/^\+\d[\d\s().-]*$/u.test(stripped)) {
+    throw new Error(`${params.field}.to must be a numeric Telegram chat ID, not a phone number`);
+  }
+  if (!/^-?\d+(?::(?:topic:)?\d+)?$/u.test(stripped)) {
+    throw new Error(
+      `${params.field}.to must be a numeric Telegram chat ID, optionally suffixed with :topic:<id>`,
+    );
+  }
+}
+
 export async function assertValidCronAnnounceDelivery(params: {
   cfg: OpenClawConfig;
   delivery?: CronDelivery;
@@ -149,6 +232,11 @@ export async function assertValidCronAnnounceDelivery(params: {
       channel: resolveAnnounceValidationChannel(params.delivery),
       accountId: params.delivery.accountId,
       field: "delivery.accountId",
+    });
+    assertValidTelegramCronTarget({
+      cfg: params.cfg,
+      delivery: params.delivery,
+      field: "delivery",
     });
   }
 
@@ -171,6 +259,11 @@ export async function assertValidCronAnnounceDelivery(params: {
       cfg: params.cfg,
       channel: resolveAnnounceValidationChannel(failureDestination),
       field: "delivery.failureDestination.channel",
+    });
+    assertValidTelegramCronTarget({
+      cfg: params.cfg,
+      delivery: failureDestination,
+      field: "delivery.failureDestination",
     });
   }
 }

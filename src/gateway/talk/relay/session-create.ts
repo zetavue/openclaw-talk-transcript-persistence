@@ -59,6 +59,10 @@ import {
   MAX_RELAY_TOOL_CALL_IDENTITY_BYTES,
   RelayToolCallLedger,
 } from "./tool-call-ledger.js";
+import {
+  isDuplicateRelayFinalTranscript,
+  recordRelayFinalTranscript,
+} from "./transcript-dedupe.js";
 import { enqueueRelayVoiceTranscript, forEachRelayOutputAudioFrame } from "./voice.js";
 
 export function createTalkRealtimeRelaySession(
@@ -410,12 +414,18 @@ export function createTalkRealtimeRelaySession(
       if (role === "assistant" && outputOwnership.suppressingOutput) {
         return;
       }
+      if (final && isDuplicateRelayFinalTranscript(relay.finalTranscriptDedupeState, role, text)) {
+        return;
+      }
       if (!relay.closing && role === "user" && !final) {
         confirmationReadiness.observeUserTranscript(text, false);
       }
       const previousTranscriptSeq = relay.voiceTranscriptSeq;
       if (final && !enqueueRelayVoiceTranscript(relay, role, text)) {
         return;
+      }
+      if (final) {
+        recordRelayFinalTranscript(relay.finalTranscriptDedupeState, role, text);
       }
       const transcriptIdentity =
         relay.voiceTranscriptSeq > previousTranscriptSeq
@@ -660,6 +670,7 @@ export function createTalkRealtimeRelaySession(
     ...(params.cfg ? { voiceConfig: params.cfg } : {}),
     voiceSessionCreated: false,
     voiceTranscriptSeq: 0,
+    finalTranscriptDedupeState: { sequence: 0 },
     voiceTranscriptQueue: VOICE_TRANSCRIPT_QUEUE_POLICY.createQueue(),
     confirmationReadiness,
     failSession,

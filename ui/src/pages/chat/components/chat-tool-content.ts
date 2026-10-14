@@ -13,6 +13,7 @@ import type { DiffFilePaths } from "../../../lib/chat/tool-call-diff.ts";
 import { resolveToolCallView, type ToolCallView } from "../../../lib/chat/tool-call-view.ts";
 import {
   isToolCardError,
+  resolveMailDraftApprovalAction,
   resolveToolCardOutcome,
   type ToolPreview,
 } from "../../../lib/chat/tool-cards.ts";
@@ -321,6 +322,8 @@ export type ToolRenderOptions = {
   runActive?: boolean;
   onOpenSidebar?: (content: SidebarContent) => void;
   onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
+  onSendMailDraftApproval?: (confirmation: string) => void | Promise<void>;
+  suppressMailDraftApproval?: boolean;
 };
 
 export function renderExpandedToolCardContent(
@@ -332,6 +335,8 @@ export function renderExpandedToolCardContent(
     onOpenSidebar,
     runActive,
     onOpenWorkspaceFile,
+    onSendMailDraftApproval,
+    suppressMailDraftApproval,
   }: ToolRenderOptions,
 ) {
   const outputDetails: SidebarContent = {
@@ -352,6 +357,10 @@ export function renderExpandedToolCardContent(
           outputText: truncateUtf16Safe(outputText ?? "", TOOL_OUTPUT_PREVIEW_CHARS),
         }
       : { ...originalCard, outputText };
+  const mailDraftApprovalAction =
+    onSendMailDraftApproval && !suppressMailDraftApproval
+      ? resolveMailDraftApprovalAction(originalCard)
+      : undefined;
   const outputFooter = html`
     ${
       outputText !== originalCard.outputText &&
@@ -372,6 +381,19 @@ export function renderExpandedToolCardContent(
               ${t("chat.toolCards.showFullOutput")}
             </button>`
           : nothing
+    }
+    ${
+      mailDraftApprovalAction
+        ? html`<div class="chat-tool-card__mail-approval">
+            <button
+              class="chat-tool-card__mail-approval-btn"
+              type="button"
+              @click=${() => void onSendMailDraftApproval?.(mailDraftApprovalAction.confirmation)}
+            >
+              ${mailDraftApprovalAction.label}
+            </button>
+          </div>`
+        : nothing
     }
   `;
   const view = resolveToolCallView({ name: card.name, args: card.args, details: card.details });

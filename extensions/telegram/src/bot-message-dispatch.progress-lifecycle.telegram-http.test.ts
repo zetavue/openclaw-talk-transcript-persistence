@@ -132,6 +132,38 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
     },
   );
 
+  it("preserves Telegram approval buttons on progress-mode final replies", async () => {
+    const approval = "Senden freigeben: Action 197";
+    await dispatchProgressTurn(
+      async (options) => {
+        await emitToolStart(options, { name: "exec", phase: "start", toolCallId: "draft" });
+        await waitForBotApiCall((call) => call.method === "sendMessage");
+      },
+      {
+        mode: "progress",
+        toolProgress: true,
+        finalReply: setReplyPayloadMetadata<ReplyPayload>(
+          {
+            text: `Draft ready\n\n${approval}`,
+            presentation: {
+              blocks: [
+                {
+                  type: "buttons",
+                  buttons: [{ label: "Senden freigeben", value: approval, style: "success" }],
+                },
+              ],
+            },
+          },
+          {},
+        ),
+      },
+    );
+
+    expect([...visibleMarkup.values()]).toContainEqual({
+      inline_keyboard: [[{ text: "Senden freigeben", callback_data: approval }]],
+    });
+  });
+
   it.each([
     { name: "cancelled final", before: undefined, finals: ["cancel"], fallback: false },
     { name: "empty final after hook", before: undefined, finals: ["empty-hook"], fallback: false },

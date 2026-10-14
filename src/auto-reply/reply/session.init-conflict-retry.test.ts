@@ -121,7 +121,7 @@ describe("runWithSessionInitConflictRetry", () => {
     await expect(runWithSessionInitConflictRetry(attempt, { sleep: instantSleep })).rejects.toThrow(
       `reply session initialization conflicted for ${SESSION_KEY}`,
     );
-    expect(state.calls).toBe(5);
+    expect(state.calls).toBe(8);
   });
 
   it("respects a caller-provided maxAttempts", async () => {
@@ -218,7 +218,7 @@ describe("runWithSessionInitConflictRetry", () => {
           delays.push(ms);
         },
       }).catch(() => {});
-      expect(delays).toEqual([250, 500, 1_000, 2_000]);
+      expect(delays).toEqual([250, 500, 1_000, 2_000, 4_000, 4_000, 4_000]);
     } finally {
       randomSpy.mockRestore();
     }
@@ -296,6 +296,39 @@ describe("initSessionState conflict retry wiring", () => {
       });
     } finally {
       commitConflictControl.beforeEntryMutation = undefined;
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("recovers when seven transient initialization writes conflict", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-conflict-burst-"));
+    commitConflictControl.abortController = undefined;
+    commitConflictControl.commitCalls = 0;
+    commitConflictControl.remainingFailures = 7;
+
+    try {
+      const result = await initSessionState({
+        cfg: { session: { store: path.join(root, "sessions.json") } } as OpenClawConfig,
+        commandAuthorized: true,
+        ctx: {
+          Body: "hello",
+          Provider: "webchat",
+          SessionKey: SESSION_KEY,
+        },
+      });
+
+      expect(commitConflictControl.commitCalls).toBe(8);
+      expect(result.sessionKey).toBe(SESSION_KEY);
+      expect(result.sessionEntry.sessionId).toBeTruthy();
+      expect(
+        loadSessionEntry({
+          readConsistency: "latest",
+          sessionKey: SESSION_KEY,
+          storePath: path.join(root, "sessions.json"),
+        }),
+      ).toMatchObject({ sessionId: result.sessionEntry.sessionId });
+    } finally {
+      commitConflictControl.remainingFailures = 0;
       await fs.rm(root, { recursive: true, force: true });
     }
   });

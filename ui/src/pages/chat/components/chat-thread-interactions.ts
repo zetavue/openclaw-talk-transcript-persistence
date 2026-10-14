@@ -188,6 +188,7 @@ export type ChatThreadProps = ChatSendStatusActions & {
   onHistoryIntent?: (event: Event) => void;
   onDraftChange: (next: string) => void;
   onSend: () => void;
+  onSendMailDraftApproval?: (confirmation: string) => void | Promise<void>;
   onSetReply?: (target: MessageReplyTarget) => void;
   replyMessageAccess?: ReplyMessageAccess;
   onRewindMessage?: (entryId: string) => Promise<boolean> | boolean;

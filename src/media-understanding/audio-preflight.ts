@@ -48,7 +48,7 @@ export async function transcribeFirstAudio(params: {
   }
 
   try {
-    const { transcript } = await runAudioTranscription({
+    const result = await runAudioTranscription({
       ctx,
       cfg,
       attachments: [firstAudio],
@@ -57,17 +57,32 @@ export async function transcribeFirstAudio(params: {
       activeModel: params.activeModel,
       localPathRoots: resolveMediaAttachmentLocalRoots({ cfg, ctx }),
     });
+    const transcript = result.transcript;
     if (!transcript) {
       return undefined;
     }
+    (ctx as Record<string, unknown>).AudioTranscriptText = transcript;
+    if (result.provider) {
+      (ctx as Record<string, unknown>).AudioTranscriptProvider = result.provider;
+    }
+    if (result.model) {
+      (ctx as Record<string, unknown>).AudioTranscriptModel = result.model;
+    }
+    (ctx as Record<string, unknown>).AudioTranscriptSource = "preflight";
 
     if (audioConfig?.echoTranscript) {
-      await sendTranscriptEcho({
-        ctx,
-        cfg,
-        transcript,
-        format: audioConfig.echoFormat ?? DEFAULT_ECHO_TRANSCRIPT_FORMAT,
-      });
+      try {
+        await sendTranscriptEcho({
+          ctx,
+          cfg,
+          transcript,
+          format: audioConfig.echoFormat ?? DEFAULT_ECHO_TRANSCRIPT_FORMAT,
+        });
+      } catch (err) {
+        if (shouldLogVerbose()) {
+          logVerbose(`audio-preflight: transcript echo failed: ${String(err)}`);
+        }
+      }
     }
 
     // Persist transcription state on the matching fact so later normalization

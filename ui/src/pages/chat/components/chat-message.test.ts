@@ -5741,4 +5741,32 @@ describe("grouped chat rendering", () => {
     expect(onToggleAssistantMessageExpanded).not.toHaveBeenCalled();
   });
 });
+describe("mail draft approval message blocks", () => {
+  it("renders a confirmation-only action beneath the draft content", () => {
+    const container = document.createElement("div");
+    const onSendMailDraftApproval = vi.fn();
+    renderAssistantMessage(
+      container,
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "The draft is ready." },
+          {
+            type: "mail_draft_approval",
+            label: "Senden freigeben",
+            confirmation: "Senden freigeben: Action 95",
+          },
+        ],
+      },
+      { onSendMailDraftApproval },
+    );
+
+    const button = container.querySelector<HTMLButtonElement>(
+      ".chat-mail-draft-approval .chat-tool-card__mail-approval-btn",
+    );
+    expect(button?.textContent?.trim()).toBe("Senden freigeben");
+    button?.click();
+    expect(onSendMailDraftApproval).toHaveBeenCalledWith("Senden freigeben: Action 95");
+  });
+});
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

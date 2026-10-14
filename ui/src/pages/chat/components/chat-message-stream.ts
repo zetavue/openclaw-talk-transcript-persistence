@@ -39,6 +39,7 @@ type StreamMessageOptions = Pick<
   | "runActive"
   | "asyncQuestions"
   | "onRequestUpdate"
+  | "onSendMailDraftApproval"
   | "canvasPluginSurfaceUrl"
   | "resourceBasePath"
   | "mediaPolicyKey"

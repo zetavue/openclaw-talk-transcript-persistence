@@ -16,7 +16,12 @@ import { recordTelegramPollRegistryEntry } from "./poll-registry.js";
 import { setTelegramRuntime } from "./runtime.js";
 import { clearTelegramRuntimeForTest } from "./runtime.test-support.js";
 import { createTelegramIngressMonitor } from "./telegram-ingress-drain.js";
-import { openTelegramIngressQueue, resolveTelegramUpdateId } from "./telegram-ingress-spool.js";
+import {
+  openTelegramIngressQueue,
+  resolveTelegramUpdateId,
+  summarizeStalledTelegramSpooledUpdates,
+} from "./telegram-ingress-spool.js";
+import { writeTelegramSpooledUpdate } from "./telegram-ingress-spool.test-support.js";
 
 async function withTempState<T>(fn: (stateDir: string) => Promise<T>): Promise<T> {
   const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-tg-spool-"));
@@ -33,7 +38,12 @@ async function withTempState<T>(fn: (stateDir: string) => Promise<T>): Promise<T
       ) => createPluginStateSyncKeyedStoreForTests<StoreValue>("telegram", options),
       openChannelIngressQueue: (
         options?: Omit<Parameters<typeof createChannelIngressQueue>[0], "channelId">,
-      ) => createChannelIngressQueue({ ...options, channelId: "telegram" }),
+      ) =>
+        createChannelIngressQueue({
+          ...options,
+          stateDir: options?.stateDir ?? stateDir,
+          channelId: "telegram",
+        }),
     },
   } as never);
   try {
@@ -53,6 +63,36 @@ afterEach(async () => {
 });
 
 describe("telegram ingress spool ordering", () => {
+  it("summarizes only stale unattempted pending updates", async () => {
+    await withTempState(async (stateDir) => {
+      await writeTelegramSpooledUpdate({
+        stateDir,
+        accountId: "acct",
+        update: { update_id: 9 },
+        now: 1_000,
+      });
+      await writeTelegramSpooledUpdate({
+        stateDir,
+        accountId: "acct",
+        update: { update_id: 10 },
+        now: 1_900,
+      });
+
+      await expect(
+        summarizeStalledTelegramSpooledUpdates({
+          accountId: "acct",
+          staleMs: 500,
+          now: 2_000,
+        }),
+      ).resolves.toEqual({
+        count: 1,
+        oldestAgeMs: 1_000,
+        oldestReceivedAt: 1_000,
+        sampleUpdateIds: [9],
+      });
+    });
+  });
+
   it("keeps a poll vote ahead of a later message from the same topic", async () => {
     await withTempState(async (stateDir) => {
       await recordTelegramPollRegistryEntry({

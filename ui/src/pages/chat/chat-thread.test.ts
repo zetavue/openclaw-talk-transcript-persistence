@@ -2502,4 +2502,89 @@ describe("durable nested activity composition", () => {
   });
 });
 
+describe("mail draft approval projection", () => {
+  const approvalOutput = JSON.stringify({
+    ok: true,
+    action_id: 95,
+    short_approval: "Senden freigeben: Action 95",
+    send_buttons: [[{ text: "Senden freigeben", callback_data: "Senden freigeben: Action 95" }]],
+  });
+
+  it("lifts approval beside the matching assistant draft within its run", () => {
+    const earlierUser = userMessage("Draft this message", 1_000, {
+      __openclaw: { idempotencyKey: "old-submit:user", runId: "run-mail-old" },
+    });
+    const earlierDraft = assistantMessage("The draft is ready.", 1_200, { runId: "run-mail-old" });
+    const laterUser = userMessage("A separate request", 2_000, {
+      __openclaw: { idempotencyKey: "new-submit:user", runId: "run-mail-new" },
+    });
+    const laterReply = assistantMessage("Unrelated reply.", 2_200, { runId: "run-mail-new" });
+    const sourceMessages = [earlierUser, earlierDraft, laterUser, laterReply];
+    const mailToolMessage = toolResultMessage(
+      "call-mail-draft",
+      "mail_create_draft",
+      approvalOutput,
+      2_100,
+      { runId: "run-mail-old" },
+    );
+
+    const items = buildItems({ messages: sourceMessages, toolMessages: [mailToolMessage] });
+    const groups = items.filter((item): item is MessageGroup => item.kind === "group");
+    const olderAssistant = groups.find((group) =>
+      group.messages.some(({ message }) =>
+        normalizeMessage(message).content.some(
+          (block) => block.type === "text" && block.text?.includes("The draft is ready"),
+        ),
+      ),
+    );
+    const newerAssistant = groups.find((group) =>
+      group.messages.some(({ message }) =>
+        normalizeMessage(message).content.some(
+          (block) => block.type === "text" && block.text?.includes("Unrelated reply"),
+        ),
+      ),
+    );
+    const approvalBlock = (group: MessageGroup | undefined) =>
+      group && normalizedBlocks(group).find((block) => block.type === "mail_draft_approval");
+
+    expect(approvalBlock(olderAssistant)).toEqual({
+      type: "mail_draft_approval",
+      label: "Senden freigeben",
+      confirmation: "Senden freigeben: Action 95",
+    });
+    expect(approvalBlock(newerAssistant)).toBeUndefined();
+    expect(earlierDraft.content).toBe("The draft is ready.");
+    const toolGroup = groups.find((group) => group.role.toLowerCase() === "tool");
+    const metadata = (toolGroup?.messages[0]?.message as Record<string, unknown> | undefined)?.[
+      "__openclaw"
+    ] as Record<string, unknown> | undefined;
+    expect(metadata?.mailDraftApprovalLifted).toBe(true);
+  });
+
+  it("keeps the approval visible when tool cards are hidden", () => {
+    const draft = assistantMessage("Draft is ready.", 1_200, { runId: "run-mail" });
+    const items = buildItems({
+      messages: [userMessage("Write a draft", 1_000), draft],
+      toolMessages: [
+        toolResultMessage("call-mail-draft", "mail_create_draft", approvalOutput, 1_300, {
+          runId: "run-mail",
+        }),
+      ],
+      showToolCalls: false,
+    });
+    const assistant = items.find(
+      (item): item is MessageGroup =>
+        item.kind === "group" && item.role.toLowerCase() === "assistant",
+    );
+
+    expect(assistant).toBeDefined();
+    expect(normalizedBlocks(assistant!).some((block) => block.type === "mail_draft_approval")).toBe(
+      true,
+    );
+    expect(items.some((item) => item.kind === "group" && item.role.toLowerCase() === "tool")).toBe(
+      false,
+    );
+  });
+});
+
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

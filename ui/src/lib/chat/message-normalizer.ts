@@ -548,6 +548,19 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
         ];
       }
       if (
+        item.type === "mail_draft_approval" &&
+        typeof item.label === "string" &&
+        typeof item.confirmation === "string"
+      ) {
+        return [
+          {
+            type: "mail_draft_approval" as const,
+            label: item.label,
+            confirmation: item.confirmation,
+          },
+        ];
+      }
+      if (
         text !== undefined &&
         (type === "text" ||
           (role === "user" && type === "input_text") ||

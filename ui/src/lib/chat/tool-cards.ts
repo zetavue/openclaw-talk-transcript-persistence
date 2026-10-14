@@ -178,6 +178,140 @@ export function resolveToolCardOutcome(
   return "unknown";
 }
 
+const LEGACY_MAIL_DRAFT_TOOL_NAMES = new Set(["bash", "exec", "process"]);
+const MAIL_DRAFT_APPROVAL_PATTERN = /^Senden freigeben: Action \d+$/u;
+
+export type MailDraftApprovalAction = {
+  label: string;
+  confirmation: string;
+};
+
+function parseMailDraftJson(text: string | undefined): Record<string, unknown> | null {
+  return text ? (safeParseJsonRecord(text.trim()) ?? null) : null;
+}
+
+function normalizeMailDraftApprovalAction(
+  label: unknown,
+  confirmation: unknown,
+): MailDraftApprovalAction | undefined {
+  if (typeof confirmation !== "string") {
+    return undefined;
+  }
+  const normalizedConfirmation = confirmation.trim();
+  if (
+    !MAIL_DRAFT_APPROVAL_PATTERN.test(normalizedConfirmation) ||
+    extractMailDraftActionId(normalizedConfirmation) === undefined
+  ) {
+    return undefined;
+  }
+  const normalizedLabel = typeof label === "string" ? label.trim() : "";
+  return {
+    label: normalizedLabel || "Senden freigeben",
+    confirmation: normalizedConfirmation,
+  };
+}
+
+function resolveMailDraftApprovalFromButtons(
+  buttons: unknown,
+): MailDraftApprovalAction | undefined {
+  if (!Array.isArray(buttons)) {
+    return undefined;
+  }
+  for (const row of buttons) {
+    if (!Array.isArray(row)) {
+      continue;
+    }
+    for (const button of row) {
+      if (!isRecord(button)) {
+        continue;
+      }
+      const action = normalizeMailDraftApprovalAction(button.text, button.callback_data);
+      if (action) {
+        return action;
+      }
+    }
+  }
+  return undefined;
+}
+
+function parseMailDraftKeyValueOutput(text: string | undefined): Map<string, string> {
+  const fields = new Map<string, string>();
+  for (const line of text?.split(/\r?\n/u) ?? []) {
+    const index = line.indexOf("=");
+    if (index > 0) {
+      fields.set(line.slice(0, index).trim(), line.slice(index + 1).trim());
+    }
+  }
+  return fields;
+}
+
+function extractMailDraftActionId(confirmation: string): number | undefined {
+  const match = /^Senden freigeben: Action (\d+)$/u.exec(confirmation.trim());
+  if (!match) {
+    return undefined;
+  }
+  const actionId = Number(match[1]);
+  return Number.isSafeInteger(actionId) && actionId > 0 ? actionId : undefined;
+}
+
+function hasMatchingMailDraftPath(fields: Map<string, string>, actionId: number): boolean {
+  const paddedActionId = String(actionId).padStart(6, "0");
+  return ["draft", "draft_md", "draft_html", "draft_eml"]
+    .map((field) => fields.get(field))
+    .filter((value): value is string => Boolean(value))
+    .some((value) => {
+      const normalized = value.replace(/\\/g, "/");
+      return (
+        normalized.includes(`/workspace-mail/drafts/${paddedActionId}-`) ||
+        normalized.includes(`/drafts/${paddedActionId}-`)
+      );
+    });
+}
+
+function resolveLegacyMailDraftApprovalAction(card: ToolCard): MailDraftApprovalAction | undefined {
+  if (!LEGACY_MAIL_DRAFT_TOOL_NAMES.has(card.name.trim().toLowerCase())) {
+    return undefined;
+  }
+  const fields = parseMailDraftKeyValueOutput(card.outputText);
+  const actionId = Number(fields.get("action_id"));
+  const shortApproval = fields.get("short_approval");
+  const status = fields.get("status")?.toLowerCase();
+  if (
+    fields.has("error") ||
+    status === "error" ||
+    status === "failed" ||
+    status === "timeout" ||
+    (card.exitCode !== undefined && card.exitCode !== 0) ||
+    !shortApproval ||
+    !Number.isSafeInteger(actionId) ||
+    actionId <= 0 ||
+    extractMailDraftActionId(shortApproval) !== actionId ||
+    !hasMatchingMailDraftPath(fields, actionId)
+  ) {
+    return undefined;
+  }
+  return normalizeMailDraftApprovalAction("Senden freigeben", shortApproval);
+}
+
+export function resolveMailDraftApprovalAction(
+  card: ToolCard,
+): MailDraftApprovalAction | undefined {
+  if (isToolCardError(card) || (card.exitCode !== undefined && card.exitCode !== 0)) {
+    return undefined;
+  }
+  if (card.name !== "mail_create_draft" && card.name !== "mail_register_draft_send") {
+    return resolveLegacyMailDraftApprovalAction(card);
+  }
+  const output = parseMailDraftJson(card.outputText);
+  if (!output || output.ok === false || output.success === false || Boolean(output.error)) {
+    return undefined;
+  }
+  return (
+    resolveMailDraftApprovalFromButtons(output.send_buttons) ??
+    normalizeMailDraftApprovalAction("Senden freigeben", output.short_approval)
+  );
+}
+
 export function extractToolPreview(
   outputText: string | undefined,
   toolName: string | undefined,

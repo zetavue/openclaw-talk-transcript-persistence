@@ -5,6 +5,9 @@
  * trusted policies, approvals, normal hooks, and final owner approval must
  * remain in this sequence.
  */
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type { ToolLoopWarning } from "@openclaw/agent-core";
 import { getRuntimeConfig } from "../config/config.js";
 import { freezeDiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
@@ -59,6 +62,126 @@ import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js"
 
 const BEFORE_TOOL_CALL_HOOK_FAILURE_REASON =
   "Tool call blocked because before_tool_call hook failed";
+const MAIL_DRAFT_EXEC_BLOCK_MARKER = "openclaw-local-mail-draft-exec-block-v1";
+const MAIL_SEND_CONFIRMATION_GUARD_MARKER = "openclaw-local-mail-send-confirmation-guard-v1";
+
+function readCommandParam(params: unknown): string | undefined {
+  if (!isPlainObject(params)) {
+    return undefined;
+  }
+  const command = params.command;
+  return typeof command === "string" ? command : undefined;
+}
+
+function shouldBlockMailDraftShell(toolName: string, params: unknown): boolean {
+  const normalizedToolName = normalizeToolPolicyName(toolName);
+  if (normalizedToolName !== "exec" && normalizedToolName !== "bash") {
+    return false;
+  }
+  const command = readCommandParam(params);
+  return command ? /\b(?:scripts\/)?create_draft\.py\b/u.test(command) : false;
+}
+
+function extractMailSendConfirmation(command: string): string | undefined {
+  if (!/\b(?:scripts\/)?send_smtp\.py\b/u.test(command)) {
+    return undefined;
+  }
+  const match = command.match(/(?:^|\s)--confirmation(?:=|\s+)(?:"([^"]*)"|'([^']*)'|([^\s]+))/u);
+  const confirmation = match?.[1] ?? match?.[2] ?? match?.[3];
+  const trimmed = confirmation?.trim();
+  return trimmed || undefined;
+}
+
+function openClawHomeDir(): string {
+  return process.env.OPENCLAW_HOME?.trim() || path.join(os.homedir(), ".openclaw");
+}
+
+function messageContentToText(content: unknown): string {
+  if (typeof content === "string") {
+    return content;
+  }
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  return content
+    .map((part) => {
+      if (!isPlainObject(part)) {
+        return "";
+      }
+      const text = part.text;
+      return typeof text === "string" ? text : "";
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
+function readLatestUserMessageText(ctx?: HookContext): string | undefined {
+  const agentId = ctx?.agentId?.trim();
+  const sessionId = ctx?.sessionId?.trim();
+  if (!agentId || !sessionId) {
+    return undefined;
+  }
+  const sessionPath = path.join(
+    openClawHomeDir(),
+    "agents",
+    agentId,
+    "sessions",
+    `${sessionId}.jsonl`,
+  );
+  let text: string;
+  try {
+    text = fs.readFileSync(sessionPath, "utf8");
+  } catch {
+    return undefined;
+  }
+  const lines = text.split(/\r?\n/u).filter(Boolean);
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    try {
+      const record = JSON.parse(lines[index] ?? "") as unknown;
+      if (!isPlainObject(record)) {
+        continue;
+      }
+      const message = record.message;
+      if (!isPlainObject(message) || message.role !== "user") {
+        continue;
+      }
+      const contentText = messageContentToText(message.content);
+      if (contentText.trim()) {
+        return contentText;
+      }
+    } catch {
+      continue;
+    }
+  }
+  return undefined;
+}
+
+function mailSendShellBlockReason(
+  toolName: string,
+  params: unknown,
+  ctx?: HookContext,
+): string | undefined {
+  const normalizedToolName = normalizeToolPolicyName(toolName);
+  if (normalizedToolName !== "exec" && normalizedToolName !== "bash") {
+    return undefined;
+  }
+  const command = readCommandParam(params);
+  if (!command) {
+    return undefined;
+  }
+  const confirmation = extractMailSendConfirmation(command);
+  if (!confirmation) {
+    if (/\b(?:scripts\/)?send_smtp\.py\b/u.test(command)) {
+      return `${MAIL_SEND_CONFIRMATION_GUARD_MARKER}: Mail sending requires an explicit --confirmation phrase copied from the user's latest message. Ask the user to confirm with the short phrase shown on the draft, for example "Senden freigeben: Action 78".`;
+    }
+    return undefined;
+  }
+  const latestUserText = readLatestUserMessageText(ctx);
+  if (!latestUserText || !latestUserText.includes(confirmation)) {
+    return `${MAIL_SEND_CONFIRMATION_GUARD_MARKER}: blocked Mail Layer send because the confirmation phrase was not present verbatim in the latest user message. Do not infer sending from ambiguous text; ask the user to confirm with exactly "${confirmation}" or the short Action-ID Freigabe shown on the draft.`;
+  }
+  return undefined;
+}
 
 /** Keep receipt routing private without widening observable hook outcomes. */
 function markPrivateDecision(
@@ -178,6 +301,25 @@ export async function runBeforeToolCallHook(args: {
     const policyRegistry = getGlobalHookRunnerRegistry() ?? undefined;
     const shouldRunTrustedPolicies = hasTrustedToolPolicies(policyRegistry);
     const normalizedParams = isPlainObject(params) ? params : {};
+    if (shouldBlockMailDraftShell(toolName, normalizedParams)) {
+      return {
+        blocked: true,
+        kind: "veto",
+        deniedReason: "plugin-before-tool-call",
+        reason: `${MAIL_DRAFT_EXEC_BLOCK_MARKER}: mail drafts must be created with the structured mail_create_draft tool. Direct create_draft.py via exec/bash is blocked so the model cannot claim a draft exists without a Mail Layer receipt.`,
+        params: normalizedParams,
+      };
+    }
+    const mailSendBlockReason = mailSendShellBlockReason(toolName, normalizedParams, args.ctx);
+    if (mailSendBlockReason) {
+      return {
+        blocked: true,
+        kind: "veto",
+        deniedReason: "plugin-before-tool-call",
+        reason: mailSendBlockReason,
+        params: normalizedParams,
+      };
+    }
     const initialCorePolicyResult =
       toolName === "skill_workshop"
         ? await resolveSkillWorkshopToolApproval({

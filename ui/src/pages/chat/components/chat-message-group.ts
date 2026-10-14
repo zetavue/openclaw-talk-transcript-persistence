@@ -1,3 +1,4 @@
+/* oxlint-disable max-lines -- Keep source-run context and approval suppression together. */
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
@@ -41,6 +42,7 @@ import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
 import { renderForwardedAttribution } from "./chat-forwarded-attribution.ts";
 import { renderGroupedMessage } from "./chat-message-bubble.ts";
 import { renderRewindButton } from "./chat-message-confirmation.ts";
+import { isMailDraftApprovalLifted } from "./chat-message-mail-approval.ts";
 import {
   FULL_MESSAGE_RETRY_REVISION_LIMIT,
   renderMessageActionButtons,
@@ -212,7 +214,10 @@ export function renderActivityGroup(
   }
   const entries = groups.flatMap((group) => group.messages);
   const cards: ToolCard[] = [];
-  const toolContexts = new Map<ToolCard, { messageKey: string; disclosureId: string }>();
+  const toolContexts = new Map<
+    ToolCard,
+    { disclosureId: string; suppressMailDraftApproval: boolean }
+  >();
   const preparedByCard = new Map<ToolCard, ReturnType<typeof readPreparedActivity>[number]>();
   const currentRunActivity = new Set<ReturnType<typeof readPreparedActivity>[number]>();
   const activity = entries.flatMap((entry) => {
@@ -229,8 +234,8 @@ export function renderActivityGroup(
     for (const [index, card] of extractToolCardsCached(entry.message).entries()) {
       cards.push(card);
       toolContexts.set(card, {
-        messageKey: entry.key,
         disclosureId: `${entry.key}:toolcard:${index}`,
+        suppressMailDraftApproval: isMailDraftApprovalLifted(entry.message),
       });
       const item = card.callId ? byCallId.get(card.callId) : undefined;
       if (item) {
@@ -272,8 +277,9 @@ export function renderActivityGroup(
     }
     return renderToolCard(card, {
       ...opts,
-      messageKey: context.messageKey,
+      messageKey: context.disclosureId,
       expanded,
+      suppressMailDraftApproval: context.suppressMailDraftApproval,
       onToggleExpanded: () => opts.onToggleToolExpanded?.(context.disclosureId, expanded),
       activityCards: [card, ...descendants],
       children: children.length

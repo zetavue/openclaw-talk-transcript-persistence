@@ -141,4 +141,96 @@ describe("transcribeFirstAudio", () => {
       format: "Heard: {transcript}",
     });
   });
+
+  it("passes only the first untranscribed audio attachment to transcriber", async () => {
+    runAudioTranscriptionMock.mockResolvedValueOnce({
+      transcript: "hello from second audio",
+      attachments: [],
+    });
+
+    const ctx = {
+      Body: "<media:image><media:audio><media:audio><media:video>",
+      media: [
+        { path: "/tmp/photo.jpg", contentType: "image/jpeg" },
+        { path: "/tmp/first-already-done.ogg", contentType: "audio/ogg", transcribed: true },
+        { path: "/tmp/second-audio.ogg", contentType: "audio/ogg" },
+        { path: "/tmp/clip.mp4", contentType: "video/mp4" },
+      ],
+    };
+
+    const transcript = await transcribeFirstAudio({ ctx, cfg: {} });
+
+    expect(transcript).toBe("hello from second audio");
+
+    expect(runAudioTranscriptionMock).toHaveBeenCalledTimes(1);
+    const runArgs = runAudioTranscriptionMock.mock.calls[0]?.[0] as
+      | { attachments?: unknown[] }
+      | undefined;
+    expect(runArgs).toBeDefined();
+    expect(Array.isArray(runArgs?.attachments)).toBe(true);
+    expect(runArgs?.attachments).toHaveLength(1);
+    expect(runArgs?.attachments?.[0]).toEqual(
+      expect.objectContaining({
+        path: "/tmp/second-audio.ogg",
+        index: 2,
+        mime: "audio/ogg",
+      }),
+    );
+  });
+
+  it("returns transcript when transcript echo fails", async () => {
+    runAudioTranscriptionMock.mockResolvedValueOnce({
+      transcript: "hello from dm audio",
+      attachments: [],
+    });
+    sendTranscriptEchoMock.mockRejectedValueOnce(new Error("transcript echo failed"));
+
+    const ctx = {
+      Body: "<media:audio>",
+      Provider: "telegram",
+      OriginatingTo: "telegram:42",
+      AccountId: "default",
+      media: [{ path: "/tmp/voice.ogg", contentType: "audio/ogg" }],
+    };
+    const cfg = {
+      tools: {
+        media: {
+          audio: {
+            enabled: true,
+            echoTranscript: true,
+            echoFormat: "Heard: {transcript}",
+          },
+        },
+      },
+    };
+
+    const transcript = await transcribeFirstAudio({ ctx, cfg });
+
+    expect(transcript).toBe("hello from dm audio");
+    expect(sendTranscriptEchoMock).toHaveBeenCalledOnce();
+  });
+
+  it("stores transcript metadata from provider output on successful preflight", async () => {
+    runAudioTranscriptionMock.mockResolvedValueOnce({
+      transcript: "Bitte den Entwurf fuer Emily ablegen",
+      attachments: [],
+      provider: "test",
+      model: "mock-audio",
+    });
+
+    const ctx = {
+      Body: "<media:audio>",
+      media: [{ path: "/tmp/voice.ogg", contentType: "audio/ogg" }],
+    };
+
+    const transcript = await transcribeFirstAudio({ ctx, cfg: {} });
+
+    expect(transcript).toBe("Bitte den Entwurf fuer Emily ablegen");
+    expect((ctx as Record<string, unknown>).AudioTranscriptText).toBe(
+      "Bitte den Entwurf fuer Emily ablegen",
+    );
+    expect((ctx as Record<string, unknown>).AudioTranscriptProvider).toBe("test");
+    expect((ctx as Record<string, unknown>).AudioTranscriptModel).toBe("mock-audio");
+    expect((ctx as Record<string, unknown>).AudioTranscriptSource).toBe("preflight");
+  });
 });

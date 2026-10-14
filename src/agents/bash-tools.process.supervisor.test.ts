@@ -37,9 +37,11 @@ function harness(managed = true) {
 
 it("confirms a requested stop without reporting a new process failure", async () => {
   const { session, call } = harness();
-  expect((await call("kill")).content[0]).toMatchObject({
+  const killed = await call("kill");
+  expect(killed.content[0]).toMatchObject({
     text: "Termination requested for session session.",
   });
+  expect(killed.details).toMatchObject({ status: "completed" });
   expect(cancel).toHaveBeenCalledWith(session.id, "manual-cancel");
   expect(getSession(session.id)?.exited).toBe(false);
   expect(getActiveBackgroundExecSessionCount()).toBe(1);
@@ -75,9 +77,11 @@ it("does not let a stop request hide a timeout failure", async () => {
 
 it("remove hides a running session without releasing its active-process count", async () => {
   const { session, call } = harness();
-  expect((await call("remove")).content[0]).toMatchObject({
+  const removed = await call("remove");
+  expect(removed.content[0]).toMatchObject({
     text: "Removed session session (termination requested).",
   });
+  expect(removed.details).toMatchObject({ status: "completed" });
   expect(cancel).toHaveBeenCalledWith(session.id, "manual-cancel");
   expect(getSession(session.id)).toBeUndefined();
   expect(getFinishedSession(session.id)).toBeUndefined();

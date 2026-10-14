@@ -77,6 +77,10 @@ import {
   resolveReplyAgentScope,
 } from "./get-reply-preprocessing.js";
 import { runPreparedReply } from "./get-reply-run.js";
+import {
+  maybeApplyVoiceCommandGuard,
+  maybeBuildHighRiskVoiceIntentConfirmation,
+} from "./get-reply-voice-intent.js";
 import { prepareInternalGetReplyOptions, withExtractedFileImages } from "./get-reply.types.js";
 import { finalizeInboundContext } from "./inbound-context.js";
 import {
@@ -264,6 +268,7 @@ export async function getReplyFromConfig(
   }
   const agentSessionKey = initialAgentScope.agentSessionKey;
   const agentId = initialAgentScope.agentId;
+  const voiceIntentResult = maybeApplyVoiceCommandGuard(ctx, finalized, agentId);
   if (
     preparedReplyDispatchRuntime &&
     !publishedModelCatalogOwnerMatchesAgent(preparedReplyDispatchRuntime, agentId)
@@ -307,6 +312,11 @@ export async function getReplyFromConfig(
         attributes: traceAttributes,
       }),
     );
+  const highRiskVoiceConfirmation = maybeBuildHighRiskVoiceIntentConfirmation(voiceIntentResult);
+  if (highRiskVoiceConfirmation) {
+    logResolverTiming("completed", "high_risk_voice_confirmation");
+    return highRiskVoiceConfirmation;
+  }
   const mergedSkillFilter = resolverTiming.measureSync("reply.resolve_skill_filter", () =>
     mergeSkillFilters(opts?.skillFilter, resolveAgentSkillsFilter(cfg, agentId)),
   );

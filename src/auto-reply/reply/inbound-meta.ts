@@ -27,6 +27,8 @@ const ACTIVE_GOAL_CONTEXT_PREFIX = "Active goal: ";
 const ACTIVE_GOAL_CONTEXT_SUFFIX =
   " — advance; keep active until fully achieved; block only after the same blocker on 3 consecutive turns; after update_goal, provide the requested visible final.";
 const INBOUND_SOURCE_MODALITIES = new Set(["text", "voice", "audio", "image", "video", "document"]);
+const OPENCLAW_LOCAL_PROVIDER_MEDIA_REF_HINT_MARKER = "openclaw-local-provider-media-ref-hint-v1";
+void OPENCLAW_LOCAL_PROVIDER_MEDIA_REF_HINT_MARKER;
 
 export function formatActiveGoalContext(sessionEntry?: SessionEntry): string | undefined {
   const goal = sessionEntry ? resolveSessionGoalDisplayState(sessionEntry) : undefined;
@@ -283,6 +285,21 @@ function formatChatWindowTimestamp(
   return formatConversationTimestamp(value, envelope)?.replace(/^[A-Z][a-z]{2} /, "");
 }
 
+function normalizePromptMediaLocator(value: Record<string, unknown>): string | undefined {
+  const mediaPath = normalizePromptMediaPath(value["media_path"]);
+  if (mediaPath) {
+    return mediaPath;
+  }
+  const mediaRef = sanitizeTranscriptField(value["media_ref"]);
+  if (!mediaRef) {
+    return undefined;
+  }
+  if (mediaRef.startsWith("telegram:file/")) {
+    return `${mediaRef} (provider-only; not image-tool-readable)`;
+  }
+  return mediaRef;
+}
+
 function formatChatWindowMessage(
   value: unknown,
   envelope?: EnvelopeFormatOptions,
@@ -295,8 +312,7 @@ function formatChatWindowMessage(
   const timestamp = formatChatWindowTimestamp(value["timestamp_ms"], envelope);
   const replyToId = sanitizeTranscriptField(value["reply_to_id"]);
   const mediaType = sanitizeTranscriptField(value["media_type"]);
-  const mediaLocator =
-    normalizePromptMediaPath(value["media_path"]) ?? sanitizeTranscriptField(value["media_ref"]);
+  const mediaLocator = normalizePromptMediaLocator(value);
   const body = sanitizeTranscriptBody(value["body"]);
   const details = [
     messageId ? `#${messageId}` : undefined,

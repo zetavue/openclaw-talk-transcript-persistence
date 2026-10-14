@@ -43,6 +43,11 @@ import {
 } from "./chat-message-attachments.ts";
 import { renderMessageWorkContext } from "./chat-message-context.ts";
 import { renderMessageImages } from "./chat-message-images.ts";
+import {
+  isMailDraftApprovalLifted,
+  readMailDraftApprovals,
+  renderMailDraftApprovals,
+} from "./chat-message-mail-approval.ts";
 import type {
   ChatMessageRenderPreparation,
   MessageActionDetails,
@@ -186,6 +191,7 @@ export function renderGroupedMessage(
     showToolCalls?: boolean;
     runActive?: boolean;
     asyncQuestions?: AsyncQuestionPresentation;
+    onSendMailDraftApproval?: (confirmation: string) => void | Promise<void>;
     autoExpandToolCalls?: boolean;
     isToolMessageExpanded?: (messageId: string) => boolean | undefined;
     onToggleToolMessageExpanded?: (messageId: string, expanded?: boolean) => void;
@@ -312,6 +318,7 @@ export function renderGroupedMessage(
   const assistantViewBlocks = normalizedMessage.content.filter(
     (item): item is Extract<MessageContentItem, { type: "canvas" }> => item.type === "canvas",
   );
+  const mailDraftApprovals = readMailDraftApprovals(normalizedMessage.content);
   const clawHubCards = normalizedMessage.content.filter((item) => item.type === "clawhub");
   const extractedThinking =
     opts.showReasoning && role === "assistant" ? extractThinkingCached(message) : null;
@@ -380,6 +387,7 @@ export function renderGroupedMessage(
     omittedMedia.length === 0 &&
     visibleAttachments.length === 0 &&
     assistantViewBlocks.length === 0 &&
+    mailDraftApprovals.length === 0 &&
     clawHubCards.length === 0 &&
     !normalizedMessage.replyTarget
   ) {
@@ -491,7 +499,8 @@ export function renderGroupedMessage(
     assistantViewBlocks.length === 0 &&
     !reasoningMarkdown;
 
-  const toolRenderOptions = { ...opts, messageKey, onOpenSidebar };
+  const suppressMailDraftApproval = isMailDraftApprovalLifted(message);
+  const toolRenderOptions = { ...opts, messageKey, onOpenSidebar, suppressMailDraftApproval };
   const renderText = () =>
     asyncQuestions
       ? renderAsyncQuestionSummary(asyncQuestions, opts.asyncQuestions!)
@@ -594,6 +603,7 @@ export function renderGroupedMessage(
           </div>`
         : renderMessageContent()
     }
+    ${renderMailDraftApprovals(mailDraftApprovals, opts.onSendMailDraftApproval)}
     ${
       hasToolCards
         ? isStandaloneToolMessage && expandsSingleToolCard && singleToolCard

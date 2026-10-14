@@ -87,6 +87,28 @@ type TelegramSendPayloadOptions = {
   onMediaAccepted?: (mediaUrls: readonly string[]) => void;
 };
 
+function withTelegramInlineButtons(
+  payload: ReplyPayload,
+  buttons?: TelegramInlineButtons,
+): ReplyPayload {
+  if (!buttons) {
+    return payload;
+  }
+  const channelData = payload.channelData ?? {};
+  const telegramData = channelData.telegram;
+  const telegram =
+    telegramData && typeof telegramData === "object" && !Array.isArray(telegramData)
+      ? (telegramData as Record<string, unknown>)
+      : {};
+  return {
+    ...payload,
+    channelData: {
+      ...channelData,
+      telegram: { ...telegram, buttons },
+    },
+  };
+}
+
 const promptContextDeliverySignature = (payload: ReplyPayload): string | undefined => {
   const projected = createStructuredOutboundPayloadPlan([payload])[0]?.payload;
   return projected ? resolveTelegramPromptContextDeliverySignature(projected) : undefined;
@@ -536,14 +558,18 @@ export async function deliverFinalAnswerText(
     await turn.answerLane.stream?.discard().catch((error: unknown) => {
       logVerbose(`telegram progress discard failed: ${formatErrorMessage(error)}`);
     });
-    const deliveryResult = await sendPayload(turn, applyTextToPayload(finalPayload, finalText), {
-      afterAcceptedDraft,
-      durable: true,
-      promptContextSequence,
-      onPlatformSendDispatch,
-      assertPlatformSendAuthorized,
-      bindPendingFinalDelivery,
-    });
+    const deliveryResult = await sendPayload(
+      turn,
+      withTelegramInlineButtons(applyTextToPayload(finalPayload, finalText), buttons),
+      {
+        afterAcceptedDraft,
+        durable: true,
+        promptContextSequence,
+        onPlatformSendDispatch,
+        assertPlatformSendAuthorized,
+        bindPendingFinalDelivery,
+      },
+    );
     result = { kind: deliveryResult.visibleReplySent ? "sent" : "skipped", deliveryResult };
   } else {
     if (isFollowUp) {

@@ -16,7 +16,13 @@ import {
 import { TelegramPollingTransportState } from "./polling-transport-state.js";
 import { createTelegramTransportIngressMonitor } from "./telegram-ingress-drain-factory.js";
 import { resolveTelegramAdoptionStallTimeoutMs } from "./telegram-ingress-drain.js";
-import { resolveTelegramUpdateId } from "./telegram-ingress-spool.js";
+import {
+  OPENCLAW_LOCAL_TELEGRAM_INGRESS_WATCHDOG_MARKER,
+  openTelegramIngressQueue,
+  resolveTelegramUpdateId,
+  summarizeStalledTelegramSpooledUpdates,
+  TELEGRAM_SPOOLED_UPDATE_PENDING_STALL_MS,
+} from "./telegram-ingress-spool.js";
 import {
   createTelegramIngressWorker,
   type TelegramIngressWorkerFactory,
@@ -375,6 +381,7 @@ export class TelegramPollingSession {
     let restartRequested = false;
     let stalledRestart = false;
     let stopTimedOut = false;
+    let pendingIngressWatchdogActive = false;
     let forceCycleTimer: ReturnType<typeof setTimeout> | undefined;
     let forceCycleResolve: (() => void) | undefined;
     const forceCyclePromise = new Promise<void>((resolve) => {
@@ -514,11 +521,45 @@ export class TelegramPollingSession {
         }, POLL_STOP_GRACE_MS);
       }
     };
+    const checkStalledPendingIngress = async () => {
+      if (pendingIngressWatchdogActive || restartRequested || this.opts.abortSignal?.aborted) {
+        return;
+      }
+      pendingIngressWatchdogActive = true;
+      try {
+        const queue = openTelegramIngressQueue({ accountId: this.opts.accountId });
+        if ((await queue.listClaims()).length > 0) {
+          return;
+        }
+        const summary = await summarizeStalledTelegramSpooledUpdates({
+          accountId: this.opts.accountId,
+          staleMs: TELEGRAM_SPOOLED_UPDATE_PENDING_STALL_MS,
+        });
+        if (summary.count <= 0) {
+          return;
+        }
+        const sample =
+          summary.sampleUpdateIds.length > 0
+            ? ` sample updateIds=${summary.sampleUpdateIds.join(",")}.`
+            : "";
+        const message = `${OPENCLAW_LOCAL_TELEGRAM_INGRESS_WATCHDOG_MARKER}: Telegram isolated polling ingress has ${summary.count} pending unattempted update(s) older than ${formatDurationPrecise(summary.oldestAgeMs)} with no active spool claim; restarting isolated ingress to recover the dispatcher.${sample}`;
+        this.opts.log(`[telegram] ${message}`);
+        this.#status.noteError(message, "recovering");
+        requestStopForRestart();
+      } catch (err) {
+        this.opts.log(
+          `[telegram][diag] ${OPENCLAW_LOCAL_TELEGRAM_INGRESS_WATCHDOG_MARKER}: pending ingress watchdog failed: ${formatErrorMessage(err)}`,
+        );
+      } finally {
+        pendingIngressWatchdogActive = false;
+      }
+    };
     ingressMonitor.start();
     const watchdog = setInterval(() => {
       if (this.opts.abortSignal?.aborted || restartRequested) {
         return;
       }
+      void checkStalledPendingIngress();
       const stall = liveness.detectStall({
         thresholdMs: this.#stallThresholdMs,
       });

@@ -57,6 +57,10 @@ import {
   normalizeMessageToolIdempotencyKeyPart,
 } from "./message-tool-idempotency.js";
 import {
+  maybeAddMailApprovalPresentation,
+  type LookupMailActionReceipt,
+} from "./message-tool-mail-approval.js";
+import {
   projectScheduledMessageActionPartialResult,
   shouldRevalidateCompletedMessageAction,
 } from "./message-tool-scheduled-execution.js";
@@ -115,6 +119,8 @@ type MessageToolOptions = {
   currentInboundAudio?: boolean;
   hasCurrentInboundAudio?: () => boolean;
   replyToMode?: "off" | "first" | "all" | "batched";
+  lookupMailActionReceipt?: LookupMailActionReceipt;
+  lookupTestAgentMailActionReceipt?: LookupMailActionReceipt;
   hasRepliedRef?: { value: boolean };
   sameChannelThreadRequired?: boolean;
   sandboxRoot?: string;
@@ -350,6 +356,31 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
           reason: suppressedVisiblePayloadReason,
           message:
             suppressedVisiblePayloadReason === "inbound_metadata_echo"
+              ? "Suppressed outbound message text because it matched inbound runtime metadata."
+              : "Suppressed outbound message text because it matched internal runtime context.",
+        });
+      }
+      await maybeAddMailApprovalPresentation(params, {
+        agentId: resolvedAgentId,
+        currentChannelProvider: effectiveCurrentChannel.currentChannelProvider,
+        lookupMailActionReceipt:
+          options?.lookupMailActionReceipt ?? options?.lookupTestAgentMailActionReceipt,
+      });
+      const receiptSuppressionReason = sanitizeMessageToolVisiblePayload(
+        params,
+        options?.agentSessionKey,
+      );
+      if (
+        receiptSuppressionReason &&
+        action === "send" &&
+        !hasSanitizedSendPayloadContent(params)
+      ) {
+        decisions.recordVisibleTextSuppressed(receiptSuppressionReason);
+        return jsonResult({
+          status: "suppressed",
+          reason: receiptSuppressionReason,
+          message:
+            receiptSuppressionReason === "inbound_metadata_echo"
               ? "Suppressed outbound message text because it matched inbound runtime metadata."
               : "Suppressed outbound message text because it matched internal runtime context.",
         });

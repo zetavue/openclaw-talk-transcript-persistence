@@ -57,6 +57,7 @@ import {
 import { buildCommandsPaginationKeyboard } from "./command-ui.js";
 import { escapeTelegramHtml } from "./format-html.js";
 import { resolveTelegramInlineButtonsScope } from "./inline-buttons.js";
+import { sendTelegramMailApprovalCallback } from "./mail-approval-callback.js";
 import {
   buildModelsKeyboard,
   buildProviderKeyboard,
@@ -154,12 +155,14 @@ export function createTelegramCallbackRouter({
         nativeCallbackCommand ?? (opaqueCallbackData ? "" : genericCallbackText);
       const hasReservedApprovalPrefix = hasTelegramApprovalCallbackPrefix(data);
       const hasReservedQuestionPrefix = hasTelegramQuestionCallbackPrefix(data);
+      const isMailApprovalCallback = /^Senden freigeben:\s*Action\s+[1-9]\d*$/u.test(data);
       const typedApprovalCallback = parseTelegramApprovalCallbackData(data);
       const legacyApprovalCallback = parseExecApprovalCommandText(
         nativeCallbackCommand ?? (opaqueCallbackData ? "" : data),
       );
       const isApprovalCallback = hasReservedApprovalPrefix || legacyApprovalCallback !== null;
-      const isRuntimeControlCallback = isApprovalCallback || hasReservedQuestionPrefix;
+      const isRuntimeControlCallback =
+        isApprovalCallback || hasReservedQuestionPrefix || isMailApprovalCallback;
       const authorizationCfg = telegramDeps.getRuntimeConfig();
       const inlineButtonsScope = resolveTelegramInlineButtonsScope({
         cfg: authorizationCfg,
@@ -287,6 +290,51 @@ export function createTelegramCallbackRouter({
           senderId,
           context: eventAuthContext,
         });
+      if (isMailApprovalCallback) {
+        let progressMessage: Awaited<ReturnType<typeof actions.replyToCallbackChat>> | undefined;
+        try {
+          const actionId = data.match(/[1-9]\d*$/u)?.[0];
+          progressMessage = await actions.replyToCallbackChat(
+            `Mail Action ${actionId ?? ""} wird gesendet ...`,
+          );
+        } catch (progressErr) {
+          logVerbose(
+            `telegram: failed to send mail approval progress message: ${String(progressErr)}`,
+          );
+        }
+        const mailApprovalCallback = await (
+          telegramDeps.sendMailApprovalCallback ?? sendTelegramMailApprovalCallback
+        )({ data });
+        if (mailApprovalCallback.handled) {
+          if (mailApprovalCallback.ok) {
+            await actions.clearCallbackButtons().catch((editErr: unknown) => {
+              logVerbose(
+                `telegram: failed to clear mail approval callback buttons: ${String(editErr)}`,
+              );
+            });
+          }
+          if (progressMessage) {
+            try {
+              await bot.api.editMessageText(
+                progressMessage.chat.id,
+                progressMessage.message_id,
+                mailApprovalCallback.text,
+                callbackMessage.business_connection_id
+                  ? { business_connection_id: callbackMessage.business_connection_id }
+                  : undefined,
+              );
+            } catch (editErr: unknown) {
+              logVerbose(
+                `telegram: failed to edit mail approval progress message: ${String(editErr)}`,
+              );
+              await actions.replyToCallbackChat(mailApprovalCallback.text);
+            }
+          } else {
+            await actions.replyToCallbackChat(mailApprovalCallback.text);
+          }
+          return;
+        }
+      }
       if (typedApprovalCallback) {
         await approvalRuntime.handleCanonical(typedApprovalCallback);
         return;

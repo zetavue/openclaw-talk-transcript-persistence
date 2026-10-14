@@ -5,6 +5,7 @@ import type { QuestionPrompt } from "../../app/question-prompt.ts";
 import {
   type ChatGuardianNotice,
   type ChatItem,
+  type MessageContentItem,
   type MessageGroup,
   accumulatedStreamText,
   advanceAccumulatedStreamText,
@@ -22,7 +23,12 @@ import {
   canvasPreviewsMatch,
   normalizeRoleForGrouping,
 } from "../../lib/chat/message-normalizer.ts";
-import type { CanvasToolPreview } from "../../lib/chat/tool-cards.ts";
+import {
+  extractToolCardsCached,
+  resolveMailDraftApprovalAction,
+  type CanvasToolPreview,
+  type MailDraftApprovalAction,
+} from "../../lib/chat/tool-cards.ts";
 import {
   buildCompactionDividerItem,
   buildGuardianNoticeItem,
@@ -101,6 +107,50 @@ export type BuildChatItemsProps = ChatInputPlacementProps & {
   loading?: boolean;
 };
 
+type MailDraftApprovalBlock = Extract<MessageContentItem, { type: "mail_draft_approval" }>;
+
+function appendMailDraftApprovalBlockToAssistantMessage(
+  message: unknown,
+  approval: MailDraftApprovalBlock,
+) {
+  const raw = asRecord(message);
+  if (!raw) {
+    return message;
+  }
+  const existingContent = Array.isArray(raw.content)
+    ? [...raw.content]
+    : typeof raw.content === "string"
+      ? [{ type: "text", text: raw.content }]
+      : typeof raw.text === "string"
+        ? [{ type: "text", text: raw.text }]
+        : [];
+  if (
+    existingContent.some((block) => {
+      const record = asRecord(block);
+      return (
+        record?.type === "mail_draft_approval" && record.confirmation === approval.confirmation
+      );
+    })
+  ) {
+    return message;
+  }
+  return { ...raw, content: [...existingContent, approval] };
+}
+
+function markMailDraftApprovalLifted(message: unknown): Record<string, unknown> | null {
+  const raw = asRecord(message);
+  if (!raw) {
+    return null;
+  }
+  return {
+    ...raw,
+    __openclaw: {
+      ...asRecord(raw["__openclaw"]),
+      mailDraftApprovalLifted: true,
+    },
+  };
+}
+
 function canvasAssistantItemKey(
   message: unknown,
   source: Parameters<typeof canvasPreviewBaseIdentity>[1],
@@ -120,11 +170,15 @@ export function buildChatItems(
   );
   const toolItems = buildMessageItems(tools).map((item) => {
     const projection: ChatProjection<typeof item> = { item };
+    const mailDraftApproval = extractToolCardsCached(item.message)
+      .map(resolveMailDraftApprovalAction)
+      .find((action): action is MailDraftApprovalAction => action !== undefined);
     return {
       projection,
       runId: normalizeOptionalString(item.message.runId),
       callId: normalizeOptionalString(item.message.toolCallId),
       preview: extractChatMessagePreview(item.message),
+      mailDraftApproval,
     };
   });
   const queuedSends = props.queue ?? [];
@@ -439,6 +493,39 @@ export function buildChatItems(
         : undefined,
     );
   };
+  // An explicit draft approval belongs next to the assistant's draft, not
+  // behind the optional tool-activity disclosure. Exact run/turn bounds keep
+  // an approval from attaching to another request's draft in long sessions.
+  for (const tool of toolItems) {
+    const action = tool.mailDraftApproval;
+    if (!action) {
+      continue;
+    }
+    const bounds = resolveProjectionBounds(tool.runId);
+    const { minimum, maximum } = insertionIndexesForBounds(items, bounds);
+    const assistant = findNearestAssistantMessage(
+      items,
+      rawMessageTimestamp(tool.projection.item.message),
+      minimum,
+      maximum,
+    );
+    if (!assistant) {
+      continue;
+    }
+    const approval: MailDraftApprovalBlock = {
+      type: "mail_draft_approval",
+      label: action.label,
+      confirmation: action.confirmation,
+    };
+    items[assistant.index] = {
+      ...assistant.item,
+      message: appendMailDraftApprovalBlockToAssistantMessage(assistant.item.message, approval),
+    };
+    const liftedToolMessage = markMailDraftApprovalLifted(tool.projection.item.message);
+    if (liftedToolMessage) {
+      tool.projection.item.message = liftedToolMessage;
+    }
+  }
   if (!searchFiltering) {
     if (props.archiveNotice) {
       projections.push({ item: props.archiveNotice });
